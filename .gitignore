@@ -1,0 +1,9 @@
+# Build output (CMake, CLion) and editor state
+build/
+build-*/
+cmake-build-*/
+.idea/
+__pycache__/
+.cache/
+# Raw per-run measurement data; results/ keeps report.md and runs.csv
+results/raw/

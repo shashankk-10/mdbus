@@ -1,0 +1,105 @@
+# The comparisons, each with its prediction written before it was first run. One entry is one
+# design decision: variant B against variant A, run as counterbalanced pairs by
+# scripts/compare.py, judged on `metric` (a row.csv column, lower is better). `predict` is the
+# expected median paired difference B - A in the metric's units ({lo, hi}), or as shares of A's
+# median ({rel_lo, rel_hi}). `threshold` is the smallest difference that matters: 1 ns for
+# means, 1 tick for percentiles, 3% for per-event costs. `noise` names the A/A entry whose
+# spread is the noise floor. `args` go to both sides; `args_a` / `args_b` to one side only, for
+# one binary in two configurations.
+#
+# Units: *_ns in nanoseconds; *_p50/_p99/_p999 in 24 MHz ticks (41.67 ns).
+
+# Paced runs measure the P-core path only (writer and fast reader on P-cores). The slow E-core
+# reader joins only where the comparison is about it.
+#
+# 2026-10-04: the phase burn was cut. The paced writer now spins to the counter edge, so every
+# publish starts at nearly the same point in a tick, and a paced hop_mean_body_ns resolves whole
+# ticks only (bench/timing.hpp): the rounding error depends on the hop, so it does not cancel in
+# B - A. Predicted ranges and thresholds narrower than one tick (41.7 ns) on paced
+# hop_mean_body_ns entries cannot be tested at that resolution, and their re-run numbers are not
+# comparable with the predictions or the old figures. Undecided: restore a random start within
+# the tick that passes a known-delay test, or raise these thresholds to one tick.
+paced: &paced [--rate, "1000000", --slow, "off"]
+fanout: &fanout [--rate, "1000000", --slow, "read"]
+wsat: &wsat [--rate, "0", --slow, "off"]
+
+decisions:
+  # Noise floors first: the identical binary against itself.
+  - {id: AA-hop, a: Base, b: Base, args: *paced, metric: hop_mean_body_ns, predict: {lo: -1, hi: 1},
+     threshold: 1, basis: identical binaries; the spread is the floor for hop comparisons}
+  - {id: AA-e2e-p99, a: Base, b: Base, args: *fanout, metric: e2e_p99, predict: {lo: -1, hi: 1},
+     threshold: 1, basis: identical binaries; floor for percentile comparisons}
+  - {id: AA-wsat, a: Base, b: Base, args: *wsat, metric: wsat_ns, predict: {lo: -1, hi: 1},
+     threshold: 1, basis: identical binaries; floor for W-sat}
+  - {id: AA-feed, a: F4, b: F4, args: [], metric: ns_per_event,
+     predict: {rel_lo: -0.02, rel_hi: 0.02}, threshold: {rel: 0.03},
+     basis: identical binaries; floor for the feed ladder}
+
+  # The bus.
+  - {id: Mutex-Base-e2e, a: Mutex, b: Base, args: *fanout, metric: e2e_p99, noise: AA-e2e-p99,
+     predict: {lo: -51, hi: -34}, threshold: 1,
+     basis: "Mutex p99 1.5-2.2 us (36-53 ticks) measured on the mutex probe; Base p99 2 ticks, one line transfer"}
+  # 2026-10-04: since this prediction Base's publish is inlined and lost the park check (one
+  # load and one branch per publish), so Base costs less than the basis quotes. Quote absolute
+  # W-sat numbers from the new campaign only.
+  - {id: Mutex-Base-wsat, a: Mutex, b: Base, args: *wsat, metric: wsat_ns, noise: AA-wsat,
+     predict: {lo: -58, hi: -42}, threshold: 1,
+     basis: "Mutex 84-97 ns per publish with one polling reader; Base about 125 cycles (39-42 ns) with one P reader"}
+  # Added 2026-10-03 from a design review, prediction written before this comparison existed.
+  - {id: Writer-alone, a: Base, b: Base, args: *wsat, args_a: [--fast, "0"], args_b: [--fast, "1"],
+     metric: wsat_ns, noise: AA-wsat, predict: {lo: 15, hi: 25}, threshold: 1,
+     basis: "review probe: publish alone 2.4 ns, with one caught-up P reader 20-25 ns; the reader holds the line the writer writes next"}
+  - {id: Pad-pp, a: Base, b: Pad64, args: *paced, metric: hop_mean_body_ns, noise: AA-hop,
+     predict: {lo: -2, hi: 2}, threshold: 1,
+     basis: P-P is clean from 64 B; neighbouring slots share a 128 B line only for the P-E granule}
+  # Added 2026-10-03: at 1 msg/us writer and reader are rarely on neighbouring slots, so Pad-pp
+  # could not show false sharing even if it existed. At saturation they are.
+  - {id: Pad-wsat, a: Base, b: Pad64, args: *wsat, metric: wsat_ns, noise: AA-wsat,
+     predict: {lo: -2, hi: 2}, threshold: 1,
+     basis: "P-cores keep coherence per 64 B line, so a reader on slot s does not slow writes to slot s+1 in the same 128 B block"}
+  - {id: Copy, a: Base, b: Copy15, args: *paced, metric: hop_mean_body_ns, noise: AA-hop,
+     predict: {lo: 31, hi: 38}, threshold: 1,
+     basis: "hop probe: one 64 B granule 58-60 ns, a payload spanning two 91-96 ns"}
+  # Added after a pre-campaign smoke run (2 runs each) showed the fast reader's hop at about 74 ns
+  # alone and about 205 ns with the slow E-core reader present. The prediction is the original
+  # design claim under test, that a wait-free writer isolates fast readers from slow ones.
+  - {id: Iso-slowE, a: Base, b: Base, args: [--rate, "1000000"], args_a: [--slow, "off"], args_b: [--slow, "read"],
+     metric: hop_mean_body_ns, noise: AA-hop, predict: {lo: -2, hi: 2}, threshold: 1,
+     basis: "design claim: readers never block the writer, so a slow reader should not move the fast one"}
+  # Added 2026-10-03, prediction written before it ran: the control for Iso-slowE's explanation.
+  - {id: Iso-burnE, a: Base, b: Base, args: [--rate, "1000000"], args_a: [--slow, "off"], args_b: [--slow, "burn"],
+     metric: hop_mean_body_ns, noise: AA-hop, predict: {lo: -2, hi: 2}, threshold: 1,
+     basis: "if the slow reader's penalty is the cross-cluster copy of the slot line, an E-core process that never maps the ring adds nothing"}
+  # Added 2026-10-03 after the quick campaign, from a design review (prediction written before
+  # the variant existed).
+  - {id: HeadPoll, a: Base, b: HeadPoll, args: *paced, metric: hop_mean_body_ns, noise: AA-hop,
+     predict: {lo: 25, hi: 50}, threshold: 1,
+     basis: "readers spin on a global head the writer stores every publish, then fetch the slot: two serialized line transfers instead of one"}
+  - {id: Relay-vs-hot, a: Base, b: Base, args: [--rate, "1000000", --slow, "read"], args_b: [--relay, "1"],
+     metric: hop_mean_body_ns, noise: AA-hop, predict: {lo: -125, hi: -100}, threshold: 1,
+     basis: "the slow E-core reader moves to a second ring fed by a P-core relay, so the hot ring has only P-core readers: most of Iso-slowE's +121 ns goes"}
+  - {id: Dispatch, a: dispatch, b: dispatch, args: [], args_a: [--dispatch, static], args_b: [--dispatch, virtual],
+     metric: dispatch_instr, predict: {lo: 5, hi: 40}, threshold: 1,
+     basis: "an indirect call per message blocks inlining of the handler: vtable and target loads, call, prologue and spills; latency within 1-3 cycles"}
+
+  # The feed ladder (in-process replay, 16K live orders: the order table fits in L2).
+  # 2026-10-04: steps redefined twice. When the pmr pool was cut, map and hash nodes moved to the
+  # global heap, so F0-F1 also removes a malloc/free per level created or emptied, and F1-F2 one
+  # per order added and removed. The two predictions below describe the pooled steps: report
+  # their re-run as redefined steps, not as tests of these predictions. The message-on-heap step
+  # was then dropped and the ladder renumbered: old F1..F5 are now F0..F4.
+  - {id: F0-F1, a: F0, b: F1, args: [], metric: ns_per_event, noise: AA-feed,
+     predict: {lo: -30, hi: -5}, threshold: {rel: 0.03},
+     basis: "std::map depth about 6 at 50 levels: about 18 cycles in L1, 100 in L2, against an O(1) ladder and bitmap"}
+  - {id: F1-F2, a: F1, b: F2, args: [], metric: ns_per_event, noise: AA-feed,
+     predict: {lo: -30, hi: -5}, threshold: {rel: 0.03},
+     basis: "node-based unordered_map to inline 16 B open addressing: one pointer chase and the node pool per add+cancel (40-50 cycles)"}
+  - {id: F2-F3, a: F2, b: F3, args: [], metric: ns_per_event, noise: AA-feed,
+     predict: {lo: -10, hi: -3}, threshold: {rel: 0.03},
+     basis: "string hash and compare per add (10-30 cycles) against one compare and an index"}
+  - {id: F3-F4, a: F3, b: F4, args: [], metric: ns_per_event, noise: AA-feed,
+     predict: {rel_lo: -0.02, rel_hi: 0.02}, threshold: {rel: 0.03},
+     basis: "inside L2 the out-of-order window already overlaps independent lookups: prefetch about 0"}
+  - {id: F3-F4-32MB, a: F3, b: F4, args: [--live, "1048576"], metric: ns_per_event, noise: AA-feed,
+     predict: {rel_lo: -0.30, rel_hi: 0.0}, threshold: {rel: 0.15},
+     basis: "a 32 MB table misses to DRAM; prefetch 4 events ahead gains 0-30%, kept only at 15% or more"}
