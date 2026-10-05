@@ -1,18 +1,16 @@
 #pragma once
 
-// FeedBook's level policy: the total qty at every price of the window, per side per instrument.
-// - "Price ladder" here is the standard trading term (a qty at every price). The F0..F4 "book
-//   ladder" of benchmark steps is baseline/book_ladder.hpp.
+// PriceLadder, FeedBook's level policy: the price ladder (feed_book.hpp) of every instrument.
 // - A level lookup is a subtract and an array index; no tree, no hash.
-// - A two-level bitmap of the non-empty levels finds the next level when the best one empties:
-//   two bit scans instead of a walk over empty prices.
+// - A two-level bitmap of the non-empty levels finds the best level behind a given price in at
+//   most two bit scans, not a walk over empty prices. That is how FeedBook refills a full side
+//   when one of its shown levels empties (next_worse_level).
 
 #include <algorithm>
 #include <cstdint>
 #include <vector>
 
 #include "mdbus/book/order_event.hpp"
-#include "mdbus/constants.hpp"
 
 namespace mdbus::book {
 
@@ -23,12 +21,10 @@ constexpr std::int32_t kNoLevel = INT32_MIN;
 // - Index i holds offset kMinPriceOffset + i, so index 0 is offset -2048.
 // - nonempty_level_bits: bit i % 64 of word i / 64 is set when level i is non-empty.
 // - nonempty_word_bits: bit w is set when nonempty_level_bits[w] is non-zero.
-// - Aligned to a 64 B line, so best_index and nonempty_word_bits, the two words most changes
-//   read, share one line.
 // Example (the bits for a level at offset 25):
 //   index 25 + 2048 = 2073 -> nonempty_level_bits[32] bit 25, and nonempty_word_bits bit 32
 template <bool kIsBid>
-class alignas(kL1LineBytes) PriceLadderSide {
+class PriceLadderSide {
  public:
   static constexpr std::int32_t kWindowSize = kMaxPriceOffset - kMinPriceOffset + 1;  // 4096
   static constexpr std::int32_t kBitsPerWord = 64;
@@ -38,22 +34,16 @@ class alignas(kL1LineBytes) PriceLadderSide {
   static constexpr std::int32_t kNoIndex = -1;  // "no such level", as an index
 
  private:
-  std::int32_t best_index = kNoIndex;  // kNoIndex when the side is empty
   std::uint64_t nonempty_word_bits = 0;
   std::uint64_t nonempty_level_bits[kLevelBitWordCount]{};
   std::uint32_t qty_at_index[kWindowSize]{};
 
  public:
-  // The best level's offset, or kNoLevel when the side is empty.
-  std::int32_t best_offset() const {
-    if (best_index < 0) return kNoLevel;
-    return kMinPriceOffset + best_index;
-  }
-
   // The best level strictly worse than price_offset, or kNoLevel; qty is set only when one is
   // found.
-  // - price_offset must lie in the window (FeedBook passes a level it shows); it need not be a
-  //   level itself.
+  // - price_offset need not be a level itself. It lies in the window (FeedBook passes a level it
+  //   shows), or one tick past the best edge (kMaxPriceOffset + 1 for bids, kMinPriceOffset - 1
+  //   for asks) to start a walk over the whole side.
   // Example (levels at offsets 25 x100 and -3 x50):
   //   bid: next_worse_level(25) -> -3, qty 50;  next_worse_level(-3) -> kNoLevel
   //   ask: next_worse_level(-3) -> 25, qty 100
@@ -72,18 +62,20 @@ class alignas(kL1LineBytes) PriceLadderSide {
 
   // Adds qty > 0 at price_offset and returns the level's new total, or 0 when price_offset is
   // outside the window.
-  // - Totals are 32-bit and not checked for overflow.
+  // - Totals are 32-bit and wrap unchecked here; FeedBook refuses an add whose new total comes
+  //   back below its qty.
   // - add_qty checks the window and remove_qty does not: a price enters the ladder only here,
   //   so a remove is always for a price that passed this check. (FeedBook also checks the
   //   window before it stores an order; the ladder test relies on this one.)
   std::uint32_t add_qty(std::int32_t price_offset, std::uint32_t qty) {
-    const std::int32_t index = price_offset - kMinPriceOffset;
-    if (!is_inside_window(index)) return 0;
+    // Unsigned, so an offset below the window wraps to a large index: one compare checks both
+    // edges, and no offset can overflow.
+    const std::uint32_t window_index =
+        static_cast<std::uint32_t>(price_offset) - static_cast<std::uint32_t>(kMinPriceOffset);
+    if (window_index >= kWindowSize) return 0;
+    const auto index = static_cast<std::int32_t>(window_index);
     qty_at_index[index] += qty;
-    if (qty_at_index[index] == qty) {  // the level was empty
-      set_bit(index);
-      if (best_index < 0 || is_better_price(kIsBid, index, best_index)) best_index = index;
-    }
+    if (qty_at_index[index] == qty) set_bit(index);  // the level was empty
     return qty_at_index[index];
   }
 
@@ -94,26 +86,11 @@ class alignas(kL1LineBytes) PriceLadderSide {
     const std::int32_t index = price_offset - kMinPriceOffset;
     qty_at_index[index] -= qty;
     const std::uint32_t qty_left = qty_at_index[index];
-    if (qty_left == 0) {
-      clear_bit(index);
-      // Nothing was better than the best, so the new best is the next level worse than it:
-      // usually in the same nonempty_level_bits word, without reading nonempty_word_bits.
-      if (index == best_index) {
-        if constexpr (kIsBid) {
-          best_index = highest_at_or_below(index - 1);
-        } else {
-          best_index = lowest_at_or_above(index + 1);
-        }
-      }
-    }
+    if (qty_left == 0) clear_bit(index);
     return qty_left;
   }
 
  private:
-  static bool is_inside_window(std::int32_t index) {
-    return index >= 0 && index < kWindowSize;
-  }
-
   // Bits 0..bit-1 of a word, and bits 0..bit, for bit in 0..63.
   static std::uint64_t bits_below(std::int32_t bit) {
     return (std::uint64_t{1} << bit) - 1;
@@ -178,10 +155,8 @@ class alignas(kL1LineBytes) PriceLadderSide {
   }
 };
 
-// A PriceLadderSide per side per instrument, about 33 KB per instrument.
-// - next_worse_level is what lets FeedBook refill a full side with one bitmap walk when one of
-//   its 6 shown levels empties.
-// - side is a Side value: 0 bid, 1 ask.
+// A PriceLadderSide per side per instrument, about 33 KB per instrument. side is a Side value:
+// 0 bid, 1 ask.
 class PriceLadder {
  private:
   struct BidAndAskSides {

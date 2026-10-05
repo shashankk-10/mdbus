@@ -2,8 +2,6 @@
 
 // The exchange feed's bytes: how the simulator packs order events into UDP packets and how the
 // feed handler unpacks them.
-// - Used by sim/exchange_sim.cpp (PacketBuilder) and src/feed_handler.cpp (decode_packet,
-//   SequenceGapTracker). Data flow: exchange -> [these bytes] -> feed handler -> book -> bus.
 // - Shaped like NASDAQ ITCH 5.0 (the exchange's order-by-order message set, one type letter per
 //   message) inside MoldUDP64 (NASDAQ's UDP framing: a sequence-numbered header, then each
 //   message behind a 2 B length).
@@ -81,46 +79,47 @@ constexpr std::uint8_t kCancelMessageType = 'X';
 constexpr std::uint8_t kExecuteMessageType = 'E';
 constexpr std::uint8_t kReplaceMessageType = 'U';
 
-struct __attribute__((packed)) AddMessage {
-  std::uint8_t type;  // 'A'
+// The 19 B every message starts with (ITCH's order messages also share their first fields).
+struct __attribute__((packed)) MessageStart {
+  std::uint8_t type;
   std::uint16_t instrument_id;
   std::uint64_t exchange_time_ns;
-  std::uint64_t order_id;
-  std::uint8_t side;  // a book::Side value: 0 bid, 1 ask (ITCH sends 'B' / 'S')
+  std::uint64_t order_id;  // for a replace, the order being replaced
+};
+static_assert(sizeof(MessageStart) == 1 + 2 + 8 + 8);  // 19
+
+struct __attribute__((packed)) AddMessage {
+  MessageStart start;  // type 'A'
+  std::uint8_t side;   // a book::Side value: 0 bid, 1 ask (ITCH sends 'B' / 'S')
   std::int32_t price;
   std::uint32_t qty;
-  char symbol[8];
+  char symbol[book::kSymbolLength];
 };
-static_assert(sizeof(AddMessage) == 1 + 2 + 8 + 8 + 1 + 4 + 4 + 8);  // 36
+static_assert(sizeof(AddMessage) == 19 + 1 + 4 + 4 + 8);  // 36
 
 // Cancel ('X') and execute ('E') share a layout. qty is the size removed or filled; a cancel's
 // 0 means all of it.
 struct __attribute__((packed)) CancelOrExecuteMessage {
-  std::uint8_t type;
-  std::uint16_t instrument_id;
-  std::uint64_t exchange_time_ns;
-  std::uint64_t order_id;
+  MessageStart start;
   std::uint32_t qty;
 };
-static_assert(sizeof(CancelOrExecuteMessage) == 1 + 2 + 8 + 8 + 4);  // 23
+static_assert(sizeof(CancelOrExecuteMessage) == 19 + 4);  // 23
 
-// Ends order_id and adds new_order_id on the same side with a new price and size.
+// Ends start.order_id and adds new_order_id on the same side with a new price and size.
 struct __attribute__((packed)) ReplaceMessage {
-  std::uint8_t type;  // 'U'
-  std::uint16_t instrument_id;
-  std::uint64_t exchange_time_ns;
-  std::uint64_t order_id;  // the order being replaced
+  MessageStart start;  // type 'U'
   std::uint64_t new_order_id;
   std::int32_t price;
   std::uint32_t qty;
 };
-static_assert(sizeof(ReplaceMessage) == 1 + 2 + 8 + 8 + 8 + 4 + 4);  // 35
+static_assert(sizeof(ReplaceMessage) == 19 + 8 + 4 + 4);  // 35
 
 // Big-endian length before each message, so a receiver can skip a type it does not know.
 constexpr std::size_t kMessageLengthFieldBytes = 2;
 
 static_assert(sizeof(AddMessage) >= sizeof(ReplaceMessage), "an add is the largest message");
-// 16 + 10 x (2 + 36) = 396
+// The largest packet PacketBuilder makes: 16 + 10 x (2 + 36) = 396. A receiver must not rely on
+// it: a message of a type it does not know may have any length.
 constexpr std::size_t kMaxPacketBytes =
     sizeof(PacketHeader) + kMaxMessagesPerPacket * (kMessageLengthFieldBytes + sizeof(AddMessage));
 
@@ -146,29 +145,24 @@ class PacketBuilder {
   }
 
   // The end-of-stream packet: no messages, and the seq that would come next.
-  // Example: start_end_of_stream(51) -> size() 16, bytes
-  //   00 00 00 00 00 00 00 33 | 00 00 00 00 | 00 00 00 01
   void start_end_of_stream(std::uint64_t packet_first_seq) {
     begin(packet_first_seq, 1);
   }
 
   // Appends event in its type's layout, behind its 2 B length. An event of no known type adds
   // nothing.
-  // Example (after start(1); a cancel of order 42 on instrument 3, qty 0, time
+  // Example (after start(1); a cancel of 300 from order 42 on instrument 3, time
   // 34'200'000'000'250 ns):
   //   size() 16 -> 41 (2 B length + 23 B message), message_count() 0 -> 1
   //   bytes 8..11 (message_count): 00 00 00 01
   //   bytes 16..40: 00 17 | 58 | 00 03 | 00 00 1f 1a ce d9 f0 fa | 00 00 00 00 00 00 00 2a |
-  //                 00 00 00 00      (length 23, 'X', instrument, time, order id, qty)
+  //                 00 00 01 2c      (length 23, 'X', instrument, time, order id, qty)
   //   then an add -> size() 79 (+ 2 + 36), message_count() 2
   void add(const book::OrderEvent& event) {
     switch (event.type) {
       case book::EventType::Add: {
         AddMessage add_message{};
-        add_message.type = kAddMessageType;
-        add_message.instrument_id = to_big_endian(event.instrument_id);
-        add_message.exchange_time_ns = to_big_endian(event.exchange_time_ns);
-        add_message.order_id = to_big_endian(event.order_id);
+        add_message.start = encode_message_start(kAddMessageType, event);
         add_message.side = static_cast<std::uint8_t>(event.side);
         add_message.price = to_big_endian(event.price);
         add_message.qty = to_big_endian(event.qty);
@@ -179,21 +173,16 @@ class PacketBuilder {
       case book::EventType::Cancel:
       case book::EventType::Execute: {
         CancelOrExecuteMessage cancel_or_execute_message{};
-        cancel_or_execute_message.type =
-            event.type == book::EventType::Cancel ? kCancelMessageType : kExecuteMessageType;
-        cancel_or_execute_message.instrument_id = to_big_endian(event.instrument_id);
-        cancel_or_execute_message.exchange_time_ns = to_big_endian(event.exchange_time_ns);
-        cancel_or_execute_message.order_id = to_big_endian(event.order_id);
+        cancel_or_execute_message.start = encode_message_start(
+            event.type == book::EventType::Cancel ? kCancelMessageType : kExecuteMessageType,
+            event);
         cancel_or_execute_message.qty = to_big_endian(event.qty);
         append(&cancel_or_execute_message, sizeof cancel_or_execute_message);
         break;
       }
       case book::EventType::Replace: {
         ReplaceMessage replace_message{};
-        replace_message.type = kReplaceMessageType;
-        replace_message.instrument_id = to_big_endian(event.instrument_id);
-        replace_message.exchange_time_ns = to_big_endian(event.exchange_time_ns);
-        replace_message.order_id = to_big_endian(event.order_id);
+        replace_message.start = encode_message_start(kReplaceMessageType, event);
         replace_message.new_order_id = to_big_endian(event.new_order_id);
         replace_message.price = to_big_endian(event.price);
         replace_message.qty = to_big_endian(event.qty);
@@ -220,6 +209,15 @@ class PacketBuilder {
   }
 
  private:
+  static MessageStart encode_message_start(std::uint8_t type, const book::OrderEvent& event) {
+    MessageStart start{};
+    start.type = type;
+    start.instrument_id = to_big_endian(event.instrument_id);
+    start.exchange_time_ns = to_big_endian(event.exchange_time_ns);
+    start.order_id = to_big_endian(event.order_id);
+    return start;
+  }
+
   void begin(std::uint64_t packet_first_seq, std::uint32_t end_of_stream) {
     first_seq = packet_first_seq;
     messages_added = 0;
@@ -261,6 +259,13 @@ struct DecodedPacket {
   book::OrderEvent events[kMaxMessagesPerPacket];
 };
 
+// The fields every message starts with, into event (the type letter is the caller's).
+inline void decode_message_start(MessageStart start, book::OrderEvent& event) {
+  event.instrument_id = from_big_endian(start.instrument_id);
+  event.exchange_time_ns = from_big_endian(start.exchange_time_ns);
+  event.order_id = from_big_endian(start.order_id);
+}
+
 // Decodes one message into the next free entry of out.events, or counts it as skipped if its
 // type is unknown. False when a known type has the wrong length.
 // - The caller guarantees length >= 1, so message_bytes[0] (the type letter) is inside it.
@@ -275,9 +280,7 @@ inline bool decode_one_message(const std::uint8_t* message_bytes, std::size_t le
       AddMessage add_message;
       std::memcpy(&add_message, message_bytes, sizeof add_message);
       event.type = book::EventType::Add;
-      event.instrument_id = from_big_endian(add_message.instrument_id);
-      event.exchange_time_ns = from_big_endian(add_message.exchange_time_ns);
-      event.order_id = from_big_endian(add_message.order_id);
+      decode_message_start(add_message.start, event);
       // Copied as sent: the book refuses a side other than 0 or 1.
       event.side = static_cast<book::Side>(add_message.side);
       event.price = from_big_endian(add_message.price);
@@ -290,12 +293,10 @@ inline bool decode_one_message(const std::uint8_t* message_bytes, std::size_t le
       if (length != sizeof(CancelOrExecuteMessage)) return false;
       CancelOrExecuteMessage cancel_or_execute_message;
       std::memcpy(&cancel_or_execute_message, message_bytes, sizeof cancel_or_execute_message);
-      event.type = cancel_or_execute_message.type == kCancelMessageType
+      event.type = cancel_or_execute_message.start.type == kCancelMessageType
                        ? book::EventType::Cancel
                        : book::EventType::Execute;
-      event.instrument_id = from_big_endian(cancel_or_execute_message.instrument_id);
-      event.exchange_time_ns = from_big_endian(cancel_or_execute_message.exchange_time_ns);
-      event.order_id = from_big_endian(cancel_or_execute_message.order_id);
+      decode_message_start(cancel_or_execute_message.start, event);
       event.qty = from_big_endian(cancel_or_execute_message.qty);
       break;
     }
@@ -304,9 +305,7 @@ inline bool decode_one_message(const std::uint8_t* message_bytes, std::size_t le
       ReplaceMessage replace_message;
       std::memcpy(&replace_message, message_bytes, sizeof replace_message);
       event.type = book::EventType::Replace;
-      event.instrument_id = from_big_endian(replace_message.instrument_id);
-      event.exchange_time_ns = from_big_endian(replace_message.exchange_time_ns);
-      event.order_id = from_big_endian(replace_message.order_id);
+      decode_message_start(replace_message.start, event);
       event.new_order_id = from_big_endian(replace_message.new_order_id);
       event.price = from_big_endian(replace_message.price);
       event.qty = from_big_endian(replace_message.qty);
@@ -325,11 +324,6 @@ inline bool decode_one_message(const std::uint8_t* message_bytes, std::size_t le
 //   message, a message running past the end, a known type with the wrong length, or bytes left
 //   over after the last message.
 // - On false, out is partly filled and means nothing.
-// Example (the 79 B packet from PacketBuilder::add: start(1), a cancel, then an add):
-//   size 79                         -> true; first_seq 1, message_count 2, event_count 2
-//   size 78                         -> false (the add runs past the end)
-//   the cancel's type byte set to Z -> true; event_count 1 (the add), skipped_unknown_messages 1
-//   start_end_of_stream(51), size 16 -> true; first_seq 51, message_count 0, end_of_stream true
 inline bool decode_packet(const std::uint8_t* data, std::size_t size, DecodedPacket& out) {
   // 1. The header.
   if (size < sizeof(PacketHeader)) return false;
@@ -364,8 +358,9 @@ inline bool decode_packet(const std::uint8_t* data, std::size_t size, DecodedPac
 // Checking packet order.
 
 // Classifies each packet by its first_seq against the next seq expected.
+// - A sequence gap: first_seq is past the next seq expected, so the messages in between were
+//   lost. Nothing is retransmitted, so a gap is never filled in.
 // - Seqs count messages, so one comparison is enough.
-// - Nothing is retransmitted, so after a gap the book stays suspect for the rest of the run.
 // - A receiver that joins late sees its first packet as a gap.
 class SequenceGapTracker {
  private:
@@ -379,6 +374,8 @@ class SequenceGapTracker {
   // Classifies one packet and moves the expected seq past it (kDuplicate leaves it).
   // - kDuplicate: first_seq is behind; the packet is a repeat or arrived late. Either way its
   //   messages are already counted as applied or missing, so the caller ignores it.
+  // - Without MoldUDP64's session name, an exchange that restarts its seqs at 1 looks the same:
+  //   its packets are duplicates until it passes the old seq (the feed handler counts them).
   // Example (a new tracker, 1 message per packet):
   //   check_packet(1, 1) -> kInOrder    next expected 2
   //   check_packet(2, 1) -> kInOrder    next expected 3
@@ -402,10 +399,6 @@ class SequenceGapTracker {
 
   std::uint64_t missing_message_count() const {
     return messages_missing;
-  }
-
-  bool has_seen_gap() const {
-    return gaps_seen != 0;
   }
 };
 

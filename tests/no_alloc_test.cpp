@@ -2,7 +2,7 @@
 // - How: a counting global operator new sees every allocation, and the count must not move
 //   across a hot-path window.
 // - Bus windows: publish (all variants), heartbeat, poll with dispatch, lap recovery, snapshot
-//   recovery and the watchdog.
+//   recovery, and the writer-health check.
 // - Feed windows, from F2 on: the book applying an event and the writer publishing its output.
 //   F0 and F1 allocate a container node per new level or order, so they are left out.
 // - Construction (attach, tables, ladders) is outside every window.
@@ -94,6 +94,7 @@ using TestLayout = BusLayout<DefaultSchema, 256>;
 
 struct NoAllocConsumer : Consumer<NoAllocConsumer, SpinWait, TestLayout> {
   std::uint64_t n = 0;
+  std::uint64_t downs = 0;  // health changes to Down
 
   void on(const BookDelta&, const MessageInfo&) {
     ++n;
@@ -110,6 +111,10 @@ struct NoAllocConsumer : Consumer<NoAllocConsumer, SpinWait, TestLayout> {
   void on_snapshot(std::uint16_t, const InstrumentSnapshot&) {
     ++n;
   }
+
+  void on_health_change(WriterHealth health) {
+    if (health == WriterHealth::Down) ++downs;
+  }
 };
 
 template <class BookConfig>
@@ -122,8 +127,7 @@ std::uint64_t feed_allocs(const std::vector<OrderEvent>& ev,
 
   auto run = [&](std::size_t from, std::size_t to) {
     feed_book.apply_batch(ev.data() + from, to - from, [&](std::size_t, const BookOutput& o) {
-      if (o.has_anything_to_publish())
-        publish_book_output(publisher, feed_book, o, 0, read_ticks());
+      publish_book_output(publisher, feed_book, o, 0, read_ticks());
     });
   };
 
@@ -143,6 +147,9 @@ TEST(bus_hot_paths_do_not_allocate) {
   InProcessBus<TestLayout> bus(8);
   NoAllocConsumer consumer;
   consumer.attach_in_process(bus.pointers());
+  // 0, so the second health check after a message reads the heartbeat (the first starts the
+  // quiet clock), and ends Down: no heartbeat is that fresh.
+  consumer.set_heartbeat_timeout(0);
   Publisher<TestLayout> publisher(bus.pointers());
   publisher.mark_running();
 
@@ -168,16 +175,16 @@ TEST(bus_hot_paths_do_not_allocate) {
     }
 
     consumer.poll_until_idle();
-    // Idle polls: past SpinWait::kIdlePollsPerHealthCheck (4096), so the watchdog runs once per
-    // round. The probe is not reached: the watchdog's first run after a message only starts the
-    // quiet period.
-    for (int k = 0; k < 5000; ++k)
+    // Idle polls for two health checks, so the second one probes. At most one probe per 1 ms,
+    // so not every round probes.
+    for (std::uint32_t k = 0; k < 2 * SpinWait::kIdlePollsPerHealthCheck; ++k)
       consumer.poll_once();
   }
 
   CHECK(g_allocs.load() == before);
   CHECK(consumer.stats().times_lapped >= 50 && consumer.stats().snapshot_recoveries > 0 &&
         consumer.n > 0);
+  CHECK(consumer.downs > 0);  // a probe ran inside the window
 }
 
 // Zero allocations while F2 and later configs apply and publish a generated stream.
@@ -199,8 +206,4 @@ TEST(feed_path_is_heap_free_from_f2) {
   // The flag feed_bench uses to exempt F0 and F1 from its page-fault gate says the same.
   static_assert(kAllocatesPerEvent<F0> && kAllocatesPerEvent<F1>);
   static_assert(!kAllocatesPerEvent<F2> && !kAllocatesPerEvent<F3> && !kAllocatesPerEvent<F4>);
-}
-
-int main(int argc, char** argv) {
-  return mdbus_test::run_main(argc, argv);
 }

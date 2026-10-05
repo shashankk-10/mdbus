@@ -3,13 +3,17 @@
 // - Per packet: decode (wire_format.hpp; a malformed packet is dropped whole, a message of
 //   unknown type is skipped), sequence check, then one batch through FeedBook::apply_batch and
 //   publish_book_output.
-// - Gap policy: nothing is retransmitted, so the first gap marks every instrument
-//   kInstrumentSuspect for the rest of the run.
+// - Gap policy: a sequence gap is never filled in (wire_format.hpp), so the first one marks
+//   every instrument kInstrumentSuspect for the rest of the run.
 // - Takes the simulator's --seed and --instruments, because both derive the instrument list
 //   from them.
-// - The end-of-stream packet or --max-ms ends the run, then a summary of every stage is
-//   printed. Exit codes: kExitOk, kExitBadCommandLine, kExitSetupFailed (command_line.hpp).
+// - The end-of-stream packet, --max-ms, SIGINT or SIGTERM ends the run. Then a summary of every
+//   stage is printed and the bus is closed. Exit codes: kExitOk, kExitBadCommandLine,
+//   kExitSetupFailed (command_line.hpp).
 
+#include <signal.h>
+
+#include <csignal>
 #include <iostream>
 #include <random>
 #include <string>
@@ -20,17 +24,36 @@
 #include "mdbus/bus_writer.hpp"
 #include "mdbus/feed/multicast_socket.hpp"
 #include "mdbus/feed/wire_format.hpp"
-#include "command_line.hpp"
+#include "sim/order_event_generator.hpp"
+#include "src/command_line.hpp"
 
 using namespace mdbus;
 
 namespace {
 
-// One spare byte: an oversized datagram fills the buffer and fails to decode instead of being cut
-// to a valid-looking size.
-constexpr std::size_t kDatagramBufferBytes = wire::kMaxPacketBytes + 1;
+// The busy path checks the heartbeat too, every 64 packets: one clock read, about 17 ns. Events
+// that never change the top levels publish nothing, so a handler that always has a packet queued
+// would otherwise reach neither the publish path's check nor the idle path's, and a quiet reader
+// would report it Down.
+constexpr std::uint64_t kPacketsPerHeartbeatCheck = 64;
 
-// The feed handler's settings, all from the command line. Every option is a "--name value" pair.
+// Set by SIGINT or SIGTERM. The run then ends as at the end of stream: the summary is printed and
+// closing the bus stores WriterState::Exited for its readers.
+volatile std::sig_atomic_t stop_requested = 0;
+
+void request_stop(int) {
+  stop_requested = 1;
+}
+
+void stop_on_sigint_or_sigterm() {
+  struct sigaction action {};
+  action.sa_handler = request_stop;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGINT, &action, nullptr);
+  sigaction(SIGTERM, &action, nullptr);
+}
+
+// The feed handler's settings, all from the command line.
 struct FeedHandlerConfig {
   std::string bus_name;          // --bus NAME, required
   sockaddr_in group_address{};   // --group ADDR --port P, both required
@@ -42,26 +65,17 @@ struct FeedHandlerConfig {
 // Fills config from argv. False on an unknown option, a bad value, or a missing --bus, --group
 // or --port.
 bool parse_command_line(int argc, char** argv, FeedHandlerConfig& config) {
-  std::string group_text;
-  std::uint16_t port = 0;
-  bool command_line_ok = argc % 2 == 1;  // every option takes a value
-  for (int i = 1; command_line_ok && i < argc; i += 2) {
-    const std::string key = argv[i];
-    const std::string value = argv[i + 1];
-    if (key == "--bus") {
-      config.bus_name = value;
-    } else if (key == "--group") {
-      group_text = value;
-    } else if (key == "--port") {
-      command_line_ok = parse_port(value, port);
-    } else if (key == "--max-ms") {
-      command_line_ok = parse_unsigned(value, config.max_run_ms);
-    } else {
-      command_line_ok = parse_seed_or_instruments(key, value, config.generator_config);
-    }
-  }
-  return command_line_ok && !config.bus_name.empty() && port != 0 &&
-         make_multicast_address(group_text, port, config.group_address);
+  const bool options_ok = parse_feed_command_line(
+      argc, argv, config.group_address, [&](const std::string& key, const std::string& value) {
+        if (key == "--bus") {
+          config.bus_name = value;
+          return true;
+        }
+        if (key == "--max-ms") return parse_unsigned(value, config.max_run_ms);
+        std::uint64_t number = 0;  // --seed or --instruments
+        return parse_unsigned(value, number) && config.generator_config.set_option(key, number);
+      });
+  return options_ok && !config.bus_name.empty();
 }
 
 void print_help() {
@@ -85,7 +99,8 @@ void print_help() {
       << "\n"
       << "example:\n"
       << "  mdbus_feed_handler --bus demo --group 239.255.0.1 --port 30001\n"
-      << "  prints \"ready bus=demo\" once it listens, and a summary per stage at the end.\n";
+      << "  prints \"ready bus=demo\" once it listens, and a summary per stage at the end\n"
+      << "  (also after Ctrl-C or SIGTERM).\n";
 }
 
 // The simulator's instrument list, derived from the same seed (make_instrument_list).
@@ -111,16 +126,17 @@ struct BookPublisher {
                          std::uint64_t receive_ticks) {
     std::uint64_t receive_ticks_left = receive_ticks;
     feed_book.apply_batch(events, count, [&](std::size_t, const book::BookOutput& output) {
-      if (!output.has_anything_to_publish()) return;
-      slots_published +=
+      const unsigned published =
           book::publish_book_output(publisher, feed_book, output, feed_flags, receive_ticks_left);
-      receive_ticks_left = 0;
+      if (published != 0) receive_ticks_left = 0;
+      slots_published += published;
     });
   }
 
   // Marks every instrument kInstrumentSuspect, each announced with an InstrumentStatus and its
   // flagged snapshot.
-  // - Runs once, on the first gap; later gaps return at once.
+  // - Runs once, on the first gap (or an end of stream that carried messages); later calls
+  //   return at once.
   void mark_all_instruments_suspect() {
     if (feed_flags != 0) return;
     feed_flags = kInstrumentSuspect;
@@ -136,10 +152,12 @@ struct BookPublisher {
   }
 };
 
-// What arrived from the exchange, before the sequence check.
+// What arrived from the exchange, and what was dropped before it reached the book.
 struct ReceiveCounters {
   std::uint64_t packets_received = 0;
-  std::uint64_t malformed_packets = 0;         // dropped whole: they failed to decode
+  // Failed to decode and dropped whole, or an end of stream that carried messages.
+  std::uint64_t malformed_packets = 0;
+  std::uint64_t duplicate_packets = 0;         // dropped whole: first_seq behind the next expected
   std::uint64_t skipped_unknown_messages = 0;  // a type the decoder does not know
 };
 
@@ -153,7 +171,7 @@ class FeedHandler {
   wire::SequenceGapTracker tracker;
   wire::DecodedPacket packet;
   ReceiveCounters received;
-  std::uint8_t datagram[kDatagramBufferBytes];
+  MulticastReceiver::DatagramBuffer datagram;
 
  public:
   explicit FeedHandler(const FeedHandlerConfig& settings)
@@ -177,22 +195,26 @@ class FeedHandler {
     return true;
   }
 
-  // Receives and applies packets until the end-of-stream packet, or --max-ms.
+  // Receives and applies packets until the end-of-stream packet, --max-ms, or a stop signal.
   void run() {
     const std::uint64_t start_ns = steady_clock_ns();
-    while (true) {
-      const std::size_t bytes = receiver.try_receive(datagram, sizeof datagram);
+    while (stop_requested == 0) {
+      const std::size_t bytes = receiver.try_receive(datagram);
       if (bytes == 0) {
         // Nothing queued. A quiet writer must still look alive to its readers.
         writer.publisher().heartbeat_if_due();
-        const std::uint64_t run_ns = steady_clock_ns() - start_ns;
-        if (config.max_run_ms != 0 && run_ns >= config.max_run_ms * kNsPerMillisecond) return;
+        // In ms: --max-ms converted to ns would wrap from about 584 years up.
+        const std::uint64_t run_ms = (steady_clock_ns() - start_ns) / kNsPerMillisecond;
+        if (config.max_run_ms != 0 && run_ms >= config.max_run_ms) return;
         continue;
       }
 
-      const std::uint64_t receive_ticks = read_ticks();  // the receive time, read in user space
       ++received.packets_received;
-      if (!wire::decode_packet(datagram, bytes, packet)) {
+      if (received.packets_received % kPacketsPerHeartbeatCheck == 0) {
+        writer.publisher().heartbeat_if_due();
+      }
+      const std::uint64_t receive_ticks = read_ticks();  // the receive time, read in user space
+      if (!wire::decode_packet(datagram.data(), bytes, packet)) {
         ++received.malformed_packets;
         continue;
       }
@@ -202,8 +224,19 @@ class FeedHandler {
       if (order == wire::SequenceGapTracker::kGap) book_publisher.mark_all_instruments_suspect();
       // Tested before the duplicate check, so an end packet is never skipped as a duplicate:
       // whichever of the simulator's 3 copies arrives first ends the run.
-      if (packet.end_of_stream) return;
-      if (order == wire::SequenceGapTracker::kDuplicate) continue;
+      if (packet.end_of_stream) {
+        // An end of stream carries no messages. One that does still ends the run, but its
+        // messages are never applied, so the book that stays for readers is marked suspect.
+        if (packet.message_count != 0) {
+          ++received.malformed_packets;
+          book_publisher.mark_all_instruments_suspect();
+        }
+        return;
+      }
+      if (order == wire::SequenceGapTracker::kDuplicate) {
+        ++received.duplicate_packets;
+        continue;
+      }
       received.skipped_unknown_messages += packet.skipped_unknown_messages;
       book_publisher.apply_and_publish(packet.events, packet.event_count, receive_ticks);
     }
@@ -218,7 +251,8 @@ class FeedHandler {
               << "  unknown_types=" << received.skipped_unknown_messages << "\n"
               << "  sequence   gaps=" << tracker.gap_count()
               << "  missing=" << tracker.missing_message_count()
-              << "  book_suspect=" << (tracker.has_seen_gap() ? "yes" : "no") << "\n"
+              << "  duplicates=" << received.duplicate_packets << "  book_suspect="
+              << ((book_publisher.feed_flags & kInstrumentSuspect) != 0 ? "yes" : "no") << "\n"
               << "  book       events=" << book.events_applied
               << "  top_changes=" << book.top_level_changes << "  rejects=" << book.refused_adds
               << "  unknown_instruments=" << book.unknown_instruments
@@ -236,6 +270,7 @@ int main(int argc, char** argv) {
     return kExitBadCommandLine;
   }
 
+  stop_on_sigint_or_sigterm();
   FeedHandler feed_handler(config);
   if (!feed_handler.open()) return kExitSetupFailed;
   feed_handler.run();

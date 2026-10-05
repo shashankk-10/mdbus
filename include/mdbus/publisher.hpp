@@ -1,15 +1,8 @@
 #pragma once
 
 // Publisher: encode a message into slot words, publish it, keep each instrument's snapshot
-// current.
-// - The feed handler's write path: FeedBook -> publish_book_output() -> Publisher ->
-//   RingWriter::publish(). BusWriter owns the Publisher of a named bus (publisher()).
-// - The only code that writes the ring and the snapshot table; readers see its work through
-//   Consumer.
-// - latency_start_ticks: the 24 MHz tick a latency measurement starts from (the intended send
-//   tick in benches, the packet receive tick in the feed handler). 0 means "not measured".
-// - heartbeat: a steady-clock time stored in the control block so readers can tell a quiet
-//   writer from a dead one (writer_liveness.hpp).
+// current. The feed handler writes the ring and the snapshot table only through it; bench and
+// test writers also store into slots or records directly.
 
 #include <array>
 #include <cstddef>
@@ -17,6 +10,7 @@
 #include <cstring>
 
 #include "mdbus/clock.hpp"
+#include "mdbus/messages.hpp"
 #include "mdbus/ring.hpp"
 #include "mdbus/segment_format.hpp"
 #include "mdbus/snapshot_table.hpp"
@@ -25,11 +19,9 @@
 namespace mdbus {
 
 // Stores the publish tick (word 1) into encoded words, after the checksum is computed.
-// - read_ticks_after() takes the checksum's word as an input. A plain read_ticks() keeps its
-//   place among memory accesses but not among register arithmetic, so the compiler once moved
-//   it above the checksum and the measured hop grew by the checksum's cost (DESIGN.md Method,
-//   "Three things the method caught in itself", item 3).
-// - Shared with the mutex writer in baseline/bus_variants.hpp, so both take the tick the same way.
+// - read_ticks_after() takes the checksum's word as an input, which keeps the checksum out of
+//   the timed window (clock.hpp says why a plain read_ticks() does not).
+// - The bench writers call it too, so every writer takes the tick the same way.
 template <std::size_t PayloadWordCount>
 inline void write_publish_ticks(std::array<std::uint64_t, PayloadWordCount>& words) {
   words[kPublishTicksWord] = read_ticks_after(words[kChecksumWord]);
@@ -82,14 +74,13 @@ class Publisher {
     return words;
   }
 
-  // Stores WriterState::Running and a first heartbeat; BusWriter::open() calls it last.
+  // A first heartbeat. The state word already reads Running: a fresh segment is all zeros.
   void mark_running() {
-    store_writer_state(*segment_pointers.control, WriterState::Running);
     ring_writer.write_heartbeat(steady_clock_ns());
   }
 
-  // Clean shutdown: a last heartbeat, then Exited, so readers report Down at once instead of
-  // waiting out the heartbeat timeout.
+  // Clean shutdown: a last heartbeat, then Exited. Readers read the state word at every health
+  // check, so they report Down at their next one, not after the 100 ms heartbeat timeout.
   void mark_exited() {
     ring_writer.write_heartbeat(steady_clock_ns());
     store_writer_state(*segment_pointers.control, WriterState::Exited);
@@ -99,46 +90,40 @@ class Publisher {
   // (latency_start_ticks and publish_ticks stay 0).
   // - Once inlined, the payload words are built in registers and stored straight into the
   //   slot; nothing goes through a stack copy.
-  // Example (a fresh bus): publish(7, Trade{10025, 300, kBuyerAggressor}) returns 0; slot 0's
-  // stamp goes 0 -> 1 -> 2; next_seq() is now 1.
+  // - A BookDelta does not compile here: a consumer that recovers later would trust a snapshot
+  //   that lacks it. Deltas go through publish_and_update_snapshot.
   template <class Message>
   std::uint64_t publish(std::uint16_t instrument_id, const Message& message) {
-    const std::uint64_t seq = ring_writer.next_seq();
-    ring_writer.publish(encode_payload(seq, instrument_id, message, 0));
-    return seq;
+    static_assert(!kIncludedInSnapshot<Message>,
+                  "a BookDelta must go through publish_and_update_snapshot");
+    return publish_unchecked(instrument_id, message);
   }
 
   // publish() plus the two latency ticks: latency_start_ticks from the caller, publish_ticks
   // read here.
   // - publish_ticks is read after the checksum and right before the odd stamp store, so the
   //   time from publish_ticks to the even store is the slot protocol and nothing else.
-  // - Why a separate entry point and not a flag on publish(): the benchmark writer passes a
-  //   runtime value, and a flag would put a branch on every publish.
-  // Example (seq 1 on a bus, latency_start_ticks taken with read_ticks() just before):
-  //   publish_with_latency_start(7, trade, 22862364843346) returns 1; slot 1's stamp is 4,
-  //   word 0 = 22862364843346, word 1 = 22862364843347 (the counter, one tick later).
+  // - Why a separate entry point and not a flag on publish(): a caller that never measures pays
+  //   no branch. Where the choice is made per message (the feed handler stamps only a packet's
+  //   first slot), it costs one branch per message: in publish_book_output for a trade, inside
+  //   publish_and_update_snapshot for a status or a delta.
   template <class Message>
   std::uint64_t publish_with_latency_start(std::uint16_t instrument_id, const Message& message,
                                            std::uint64_t latency_start_ticks) {
-    const std::uint64_t seq = ring_writer.next_seq();
-    PayloadWords words = encode_payload(seq, instrument_id, message, latency_start_ticks);
-    write_publish_ticks(words);
-    ring_writer.publish(words);
-    return seq;
+    static_assert(!kIncludedInSnapshot<Message>,
+                  "a BookDelta must go through publish_and_update_snapshot");
+    return publish_with_latency_start_unchecked(instrument_id, message, latency_start_ticks);
   }
 
   // Publishes `message`, then writes `snapshot` as instrument_id's snapshot, stamped with the
   // seq just published (last_included_seq) and the id.
-  // - Slot first, then snapshot: lazy recovery (consumer.hpp, step 2) relies on this order.
-  //   The next slot's even store is a release after the snapshot's, so a reader that acquires
-  //   any later slot also sees this snapshot.
+  // - Slot first, then snapshot, for latency: the delta is visible one snapshot write sooner.
+  //   Recovery (consumer.hpp) needs only this snapshot complete before the next slot's release
+  //   store, which one writer gives in either order: a reader that acquires any later slot also
+  //   sees this snapshot.
   // - latency_start_ticks != 0 measures latency as publish_with_latency_start() does.
   // - An id at or past the instrument count aborts before anything is published: the write
   //   would land past the end of the snapshot table, in memory every reader maps.
-  // Example (seq 2 on a bus where instrument 7's snapshot was never written):
-  //   publish_and_update_snapshot(7, delta, snapshot) returns 2; slot 2's stamp is 6;
-  //   record 7's version goes 0 -> 1 -> 2 and holds last_included_seq 2, instrument_id 7.
-  //   The same call again returns 3 and leaves version 4.
   template <class Message>
   std::uint64_t publish_and_update_snapshot(std::uint16_t instrument_id, const Message& message,
                                             InstrumentSnapshot snapshot,
@@ -147,28 +132,49 @@ class Publisher {
                    "publish_and_update_snapshot: instrument id past the table");
     std::uint64_t seq;
     if (latency_start_ticks != 0)
-      seq = publish_with_latency_start(instrument_id, message, latency_start_ticks);
+      seq = publish_with_latency_start_unchecked(instrument_id, message, latency_start_ticks);
     else
-      seq = publish(instrument_id, message);
+      seq = publish_unchecked(instrument_id, message);
     snapshot.last_included_seq = seq;
     snapshot.instrument_id = instrument_id;
     snapshot_table.write(instrument_id, snapshot);
     return seq;
   }
 
-  // Bench-only: publishes words encoded beforehand with encode_payload(), so a benchmark
-  // measures the ring and not the encoding.
+  // Benches and tests only: publishes words encoded beforehand with encode_payload(). A bench
+  // then times the ring and not the encoding; a test can publish a delta's slot alone.
   void publish_encoded_words(const PayloadWords& words) {
     ring_writer.publish(words);
   }
 
-  // For the writer's idle loop, so a quiet writer still looks alive.
+  // For the writer's own loop, idle or busy without publishing, so it still looks alive.
   void heartbeat_if_due() {
     ring_writer.heartbeat_if_due();
   }
 
   std::uint64_t next_seq() const {
     return ring_writer.next_seq();
+  }
+
+ private:
+  // publish() and publish_with_latency_start() without the BookDelta check, for
+  // publish_and_update_snapshot, which writes the snapshot right after.
+  template <class Message>
+  std::uint64_t publish_unchecked(std::uint16_t instrument_id, const Message& message) {
+    const std::uint64_t seq = ring_writer.next_seq();
+    ring_writer.publish(encode_payload(seq, instrument_id, message, 0));
+    return seq;
+  }
+
+  template <class Message>
+  std::uint64_t publish_with_latency_start_unchecked(std::uint16_t instrument_id,
+                                                     const Message& message,
+                                                     std::uint64_t latency_start_ticks) {
+    const std::uint64_t seq = ring_writer.next_seq();
+    PayloadWords words = encode_payload(seq, instrument_id, message, latency_start_ticks);
+    write_publish_ticks(words);
+    ring_writer.publish(words);
+    return seq;
   }
 };
 

@@ -1,0 +1,286 @@
+Mon Oct  5 23:49:54 IST 2026
+commit 7c95cde1da5125035d7f4853023ee4c7489bc356
+18 comparisons, 6 pairs each, about 27 min
+  AA-hop           Base     -> Base       hop_mean_body_ns
+  AA-e2e-p99       Base     -> Base       e2e_p99
+  AA-wsat          Base     -> Base       wsat_ns
+  AA-feed          F4       -> F4         ns_per_event
+  Mutex-Base-e2e   Mutex    -> Base       e2e_p99
+  Mutex-Base-wsat  Mutex    -> Base       wsat_ns
+  Writer-alone     Base     -> Base       wsat_ns
+  Pad-pp           Base     -> Pad64      hop_mean_body_ns
+  Pad-wsat         Base     -> Pad64      wsat_ns
+  Copy             Base     -> Copy15     hop_mean_body_ns
+  Iso-slowE        Base     -> Base       hop_mean_body_ns
+  HeadPoll         Base     -> HeadPoll   hop_mean_body_ns
+  Dispatch         dispatch -> dispatch   dispatch_instr
+  F0-F1            F0       -> F1         ns_per_event
+  F1-F2            F1       -> F2         ns_per_event
+  F2-F3            F2       -> F3         ns_per_event
+  F3-F4            F3       -> F4         ns_per_event
+  F3-F4-32MB       F3       -> F4         ns_per_event
+AA-hop: Base -> Base on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  AA-hop           unresolved    hop_mean_body_ns: median -2.1, range [-8, 6.3], 4/6 agree, predicted [-1, 1] miss
+AA-e2e-p99: Base -> Base on e2e_p99
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  AA-e2e-p99       unresolved    e2e_p99: median +0, range [0, 3.82e+05], 1/6 agree, predicted [-1, 1] hit
+AA-wsat: Base -> Base on wsat_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 2 A Base       rc=0 attempt 2
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  AA-wsat          no difference wsat_ns: median +0.0699, range [-0.234, 0.186], 4/6 agree, predicted [-1, 1] hit
+AA-feed: F4 -> F4 on ns_per_event
+  pair 0 A F4         rc=0 attempt 1
+  pair 0 B F4         rc=0 attempt 1
+  pair 1 B F4         rc=0 attempt 1
+  pair 1 A F4         rc=0 attempt 1
+  pair 2 A F4         rc=0 attempt 1
+  pair 2 B F4         rc=0 attempt 1
+  pair 3 B F4         rc=0 attempt 1
+  pair 3 A F4         rc=0 attempt 1
+  pair 4 A F4         rc=0 attempt 1
+  pair 4 B F4         rc=0 attempt 1
+  pair 5 B F4         rc=0 attempt 1
+  pair 5 A F4         rc=0 attempt 1
+  AA-feed          no difference ns_per_event: median +0.0305, range [-0.397, 0.275], 4/6 agree, predicted [-1.06, 1.06] hit
+Mutex-Base-e2e: Mutex -> Base on e2e_p99
+  pair 0 A Mutex      rc=0 attempt 1 gates failed: fast_laps
+  pair 0 A Mutex      rc=0 attempt 2
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Mutex      rc=0 attempt 1
+  pair 2 A Mutex      rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Mutex      rc=0 attempt 1
+  pair 4 A Mutex      rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Mutex      rc=0 attempt 1
+  Mutex-Base-e2e   B better      e2e_p99: median -5.68e+03, range [-6.61e+03, -5.55e+03], 6/6 agree, predicted [-51, -34] miss
+Mutex-Base-wsat: Mutex -> Base on wsat_ns
+  pair 0 A Mutex      rc=0 attempt 1
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Mutex      rc=0 attempt 1
+  pair 2 A Mutex      rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Mutex      rc=0 attempt 1
+  pair 4 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 4 A Mutex      rc=0 attempt 2
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Mutex      rc=0 attempt 1
+  Mutex-Base-wsat  no difference wsat_ns: median +0.518, range [-0.758, 0.936], 5/6 agree, predicted [-58, -42] miss
+Writer-alone: Base -> Base on wsat_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1 gates failed: pshare_writer
+  pair 1 A Base       rc=0 attempt 2
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  Writer-alone     B worse       wsat_ns: median +23.4, range [23.3, 23.6], 6/6 agree, predicted [15, 25] hit
+Pad-pp: Base -> Pad64 on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Pad64      rc=0 attempt 1
+  pair 1 B Pad64      rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Pad64      rc=0 attempt 1
+  pair 3 B Pad64      rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Pad64      rc=0 attempt 1
+  pair 5 B Pad64      rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  Pad-pp           no difference hop_mean_body_ns: median +0.919, range [0.274, 4.38], 6/6 agree, predicted [-2, 2] hit
+Pad-wsat: Base -> Pad64 on wsat_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Pad64      rc=0 attempt 1
+  pair 1 B Pad64      rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Pad64      rc=0 attempt 1
+  pair 3 B Pad64      rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Pad64      rc=0 attempt 1
+  pair 5 B Pad64      rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  Pad-wsat         B better      wsat_ns: median -1.75, range [-3.37, -1.47], 6/6 agree, predicted [-2, 2] hit
+Copy: Base -> Copy15 on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Copy15     rc=0 attempt 1
+  pair 1 B Copy15     rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Copy15     rc=0 attempt 1
+  pair 3 B Copy15     rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Copy15     rc=0 attempt 1
+  pair 5 B Copy15     rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  Copy             B worse       hop_mean_body_ns: median +42, range [36.6, 43.5], 6/6 agree, predicted [31, 38] miss
+Iso-slowE: Base -> Base on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B Base       rc=0 attempt 1
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1
+  Iso-slowE        B worse       hop_mean_body_ns: median +133, range [113, 144], 6/6 agree, predicted [-2, 2] miss
+HeadPoll: Base -> HeadPoll on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 0 B HeadPoll   rc=0 attempt 1
+  pair 1 B HeadPoll   rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B HeadPoll   rc=0 attempt 1
+  pair 3 B HeadPoll   rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1
+  pair 4 B HeadPoll   rc=0 attempt 1
+  pair 5 B HeadPoll   rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 5 A Base       rc=0 attempt 2
+  HeadPoll         B worse       hop_mean_body_ns: median +29.7, range [10.2, 47.6], 6/6 agree, predicted [25, 50] hit
+Dispatch: dispatch -> dispatch on dispatch_instr
+  pair 0 A dispatch   rc=0 attempt 1
+  pair 0 B dispatch   rc=0 attempt 1
+  pair 1 B dispatch   rc=0 attempt 1
+  pair 1 A dispatch   rc=0 attempt 1
+  pair 2 A dispatch   rc=0 attempt 1
+  pair 2 B dispatch   rc=0 attempt 1
+  pair 3 B dispatch   rc=0 attempt 1
+  pair 3 A dispatch   rc=0 attempt 1
+  pair 4 A dispatch   rc=0 attempt 1
+  pair 4 B dispatch   rc=0 attempt 1
+  pair 5 B dispatch   rc=0 attempt 1
+  pair 5 A dispatch   rc=0 attempt 1
+  Dispatch         B worse       dispatch_instr: median +9.9, range [9.9, 9.9], 6/6 agree, predicted [5, 40] hit
+F0-F1: F0 -> F1 on ns_per_event
+  pair 0 A F0         rc=0 attempt 1
+  pair 0 B F1         rc=0 attempt 1
+  pair 1 B F1         rc=0 attempt 1
+  pair 1 A F0         rc=0 attempt 1
+  pair 2 A F0         rc=0 attempt 1
+  pair 2 B F1         rc=0 attempt 1
+  pair 3 B F1         rc=0 attempt 1
+  pair 3 A F0         rc=0 attempt 1
+  pair 4 A F0         rc=0 attempt 1
+  pair 4 B F1         rc=0 attempt 1
+  pair 5 B F1         rc=0 attempt 1
+  pair 5 A F0         rc=0 attempt 1
+  F0-F1            B better      ns_per_event: median -29.9, range [-40.2, -29.2], 6/6 agree, predicted [-30, -5] hit
+F1-F2: F1 -> F2 on ns_per_event
+  pair 0 A F1         rc=0 attempt 1 gates failed: pshare
+  pair 0 A F1         rc=0 attempt 2 gates failed: pshare
+  pair 0 A F1         rc=0 attempt 3
+  pair 0 B F2         rc=0 attempt 1
+  pair 1 B F2         rc=0 attempt 1 gates failed: pshare
+  pair 1 B F2         rc=0 attempt 2
+  pair 1 A F1         rc=0 attempt 1 gates failed: pshare
+  pair 1 A F1         rc=0 attempt 2 gates failed: pshare
+  pair 1 A F1         rc=0 attempt 3 gates failed: pshare
+  pair 2 A F1         rc=0 attempt 1
+  pair 2 B F2         rc=0 attempt 1
+  pair 3 B F2         rc=0 attempt 1
+  pair 3 A F1         rc=0 attempt 1
+  pair 4 A F1         rc=0 attempt 1
+  pair 4 B F2         rc=0 attempt 1
+  pair 5 B F2         rc=0 attempt 1
+  pair 5 A F1         rc=0 attempt 1
+  F1-F2            unresolved    ns_per_event: median -63.8, range [-70, -58.5], 5/5 agree, predicted [-30, -5] miss
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
+F2-F3: F2 -> F3 on ns_per_event
+  pair 0 A F2         rc=0 attempt 1
+  pair 0 B F3         rc=0 attempt 1
+  pair 1 B F3         rc=0 attempt 1
+  pair 1 A F2         rc=0 attempt 1
+  pair 2 A F2         rc=0 attempt 1
+  pair 2 B F3         rc=0 attempt 1
+  pair 3 B F3         rc=0 attempt 1
+  pair 3 A F2         rc=0 attempt 1
+  pair 4 A F2         rc=0 attempt 1
+  pair 4 B F3         rc=0 attempt 1
+  pair 5 B F3         rc=0 attempt 1
+  pair 5 A F2         rc=0 attempt 1
+  F2-F3            B better      ns_per_event: median -7.02, range [-7.6, -5.34], 6/6 agree, predicted [-10, -3] hit
+F3-F4: F3 -> F4 on ns_per_event
+  pair 0 A F3         rc=0 attempt 1
+  pair 0 B F4         rc=0 attempt 1
+  pair 1 B F4         rc=0 attempt 1
+  pair 1 A F3         rc=0 attempt 1
+  pair 2 A F3         rc=0 attempt 1
+  pair 2 B F4         rc=0 attempt 1
+  pair 3 B F4         rc=0 attempt 1
+  pair 3 A F3         rc=0 attempt 1
+  pair 4 A F3         rc=0 attempt 1
+  pair 4 B F4         rc=0 attempt 1
+  pair 5 B F4         rc=0 attempt 1
+  pair 5 A F3         rc=0 attempt 1
+  F3-F4            unresolved    ns_per_event: median -1.62, range [-2.47, -1.19], 6/6 agree, predicted [-1.09, 1.09] miss
+F3-F4-32MB: F3 -> F4 on ns_per_event
+  pair 0 A F3         rc=0 attempt 1
+  pair 0 B F4         rc=0 attempt 1
+  pair 1 B F4         rc=0 attempt 1
+  pair 1 A F3         rc=0 attempt 1
+  pair 2 A F3         rc=0 attempt 1
+  pair 2 B F4         rc=0 attempt 1
+  pair 3 B F4         rc=0 attempt 1
+  pair 3 A F3         rc=0 attempt 1
+  pair 4 A F3         rc=0 attempt 1
+  pair 4 B F4         rc=0 attempt 1
+  pair 5 B F4         rc=0 attempt 1
+  pair 5 A F3         rc=0 attempt 1
+  F3-F4-32MB       B better      ns_per_event: median -37.2, range [-39, -30.2], 6/6 agree, predicted [-30, 0] miss
+report: /tmp/mdbus-campaign-v2/raw/report.md
+python scripts/compare.py --all --out /tmp/mdbus-campaign-v2/raw  925.32s user 59.16s system 98% cpu 16:38.84 total

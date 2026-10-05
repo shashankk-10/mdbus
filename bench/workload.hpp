@@ -5,7 +5,6 @@
 //   once, before any timing starts. The writer replays the pool in a loop.
 // - Reader side: SimulatedReaderWork, the work the fast reader does per message, and the
 //   dispatch that feeds it (also what dispatch_bench measures).
-// - Used by bus_bench and dispatch_bench.
 
 #include <array>
 #include <cstdint>
@@ -49,8 +48,8 @@ inline std::vector<SyntheticDelta> make_event_pool(std::uint64_t seed) {
   return events;
 }
 
-// The pool as payload words of Layout, at seqs 0..kEventPoolSize-1: what W-sat (unpaced, the
-// writer publishes flat out) and the dispatch benchmark replay.
+// The pool as payload words of Layout, at seqs 0..kEventPoolSize-1: what W-sat and the dispatch
+// benchmark replay.
 template <class Layout>
 using EncodedPayloadPool = std::array<typename Layout::PayloadWords, kEventPoolSize>;
 
@@ -97,7 +96,9 @@ struct SimulatedReaderWork {
   }
 };
 
-// Static dispatch of one payload into SimulatedReaderWork: what Consumer<Derived> compiles to.
+// Static dispatch of one payload into SimulatedReaderWork: what Schema::dispatch compiles to.
+// Consumer<Derived> dispatches the same way but adds an instrument check and the recovery
+// filter, neither of which is here.
 template <std::size_t WordCount>
 void dispatch_to_work(SimulatedReaderWork& work,
                       const std::array<std::uint64_t, WordCount>& words) {

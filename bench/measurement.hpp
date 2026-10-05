@@ -4,9 +4,8 @@
 // - LatencyHistogram: hop and e2e latency in ticks, summarised into LatencySummary rows.
 // - TimedBatches: per-operation ns, instructions and cycles of fixed-size batches.
 // - ProcessCounters: the per-process counters the validity gates read (P-core share, clock,
-//   page faults).
+//   page faults); CounterWindow: their change over a measurement window.
 // - Process setup: QoS, prefaulting and wiring memory, so the page-fault gate passes.
-// - Used by bus_bench, dispatch_bench and feed_bench.
 
 #include <hdr/hdr_histogram.h>
 #include <libproc.h>
@@ -135,8 +134,10 @@ class LatencyHistogram {
 // Process counters.
 
 // One reading of this process's cycle, instruction, CPU time and page-fault counters.
-// - From proc_pid_rusage V6: public, no root needed, but a few hundred ns a call, so read only
-//   around windows and around batches of 1e4 operations or more.
+// - From proc_pid_rusage V6: public, no root needed, but about 1 us and 8,200 instructions a call
+//   (measured on an M1 Pro), so read only around windows and around batches of 1e4 operations
+//   or more. A batch's instruction count includes about one call: +0.5 per W-sat publish or
+//   dispatched message, about +6 per feed event (1365 events per chunk).
 // - Each role is a process with one hot thread, so process totals are that thread's.
 // - CPU times are counter ticks on arm64, not ns.
 struct ProcessCounters {
@@ -187,6 +188,25 @@ struct ProcessCounters {
   double effective_ghz() const {
     if (cpu_time_ticks == 0) return 0;
     return static_cast<double>(cycles) / (static_cast<double>(cpu_time_ticks) * kNsPerTick);
+  }
+};
+
+// Process counters over a bus_bench role's measurement window.
+// - start() does nothing once open, so a role calls it on any event it sees inside the window
+//   and the first such call reads the counters. Warm-up work stays out of them.
+struct CounterWindow {
+  ProcessCounters at_start;
+  bool is_open = false;
+
+  void start() {
+    if (is_open) return;
+    at_start = ProcessCounters::read();
+    is_open = true;
+  }
+
+  ProcessCounters end() const {
+    if (!is_open) return ProcessCounters{};
+    return ProcessCounters::read() - at_start;
   }
 };
 

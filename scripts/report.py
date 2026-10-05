@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 """Markdown tables from a results tree.
 
-  report.py RESULTS
+  report.py RESULTS [--campaign TEXT] [--force]
 
 - Reads every row.csv (one per run) and result.json (one per comparison, from compare.py) under
   RESULTS.
 - Writes RESULTS/report.md: the comparisons and their verdicts against the predictions, then
   per-variant medians over the valid runs. Also writes RESULTS/runs.csv with every run.
+- Writes nothing and exits 1 when RESULTS holds no result.json, or fewer runs or comparisons
+  than the report.md already in it counts, so a report is never replaced by an empty or a
+  smaller one; --force writes anyway. The repo's results/ holds one campaign's report.md,
+  runs.csv and campaign.log; the rows behind them (results/raw) are not committed.
+- --campaign TEXT: a line under the title naming the campaign the report covers.
 - Percentiles are counter ticks (41.67 ns). Below 3 ticks a reading k only says the true value
   lies in (k - 1, k + 1) ticks, so those are printed as intervals, not points.
 """
+import argparse
 import csv
 import json
 import os
+import re
 import statistics
 import sys
 
 NS_PER_TICK = 125.0 / 3.0  # the M1 counter runs at 24 MHz
 POINT_READING_MIN_TICKS = 3  # below this a percentile is printed as an interval
 NS_BEFORE_MICROSECONDS = 1e4  # at or above this, print microseconds instead of nanoseconds
-P_CORE_PLACEMENT = "pp"  # old runs: writer and fast reader both on P-cores
+# The counts line of a report.md this script wrote.
+COUNTS_LINE = re.compile(r"^Runs: (\d+) \(\d+ valid\)\. Comparisons: (\d+)\.$", re.MULTILINE)
 
 
 def find_files(root, name):
@@ -59,22 +67,22 @@ def format_ticks(ticks):
 
 def comparison_table(results):
     """One row per comparison; one with too few usable pairs shows its verdict and why."""
-    out = ["| id | A -> B | metric | A median | B - A median | range | agree | sign p | left out "
+    out = ["| id | A -> B | metric | A median | B - A median | range | agree | left out "
            "| predicted | verdict |",
-           "|---|---|---|---|---|---|---|---|---|---|---|"]
+           "|---|---|---|---|---|---|---|---|---|---|"]
     for result in sorted(results, key=lambda result: result["id"]):
         left_out = result.get("invalid_pairs", 0) + result.get("stalled_pairs", 0)
         if "median" not in result:
-            out.append("| %s | %s -> %s | %s | | | | | | %d | | %s (%s) |" % (
+            out.append("| %s | %s -> %s | %s | | | | | %d | | %s (%s) |" % (
                 result["id"], result["a"], result["b"], result["metric"], left_out,
                 result["verdict"], result.get("why", "")))
             continue
         hit = "hit" if result["prediction_hit"] else "miss"
-        out.append("| %s | %s -> %s | %s | %.4g | %+.3g | [%.3g, %.3g] | %d/%d | %.3f | %d "
+        out.append("| %s | %s -> %s | %s | %.4g | %+.3g | [%.3g, %.3g] | %d/%d | %d "
                    "| [%.3g, %.3g] %s | %s |" % (
                        result["id"], result["a"], result["b"], result["metric"],
                        result["a_median"], result["median"], result["lo"], result["hi"],
-                       result["agree"], result["n"], result["sign_p"], left_out,
+                       result["agree"], result["n"], left_out,
                        result["predicted"][0], result["predicted"][1], hit, result["verdict"]))
     return out
 
@@ -97,27 +105,22 @@ def scenario_table(valid_rows, scenario, keys, columns):
 
 
 def paced_latency_table(valid_rows):
-    """Hop and e2e latency of the paced runs with a fast reader, per (variant, slow, relay)."""
+    """Hop and e2e latency of the paced runs with a fast reader, per (variant, slow)."""
     cells = {}
     for row in valid_rows:
-        # Runs from before 2026-10-04 carry a placement column, and some put the fast reader on
-        # an E-core: only their "pp" runs are kept. Newer runs have no such column (the fast
-        # reader is always on a P-core), so a missing placement counts as "pp".
-        if (row.get("scenario") == "paced" and row.get("fast") == "1"
-                and row.get("placement", P_CORE_PLACEMENT) == P_CORE_PLACEMENT):
-            key = (row["variant"], row.get("slow", "off"), row.get("relay", "0"))
+        if row.get("scenario") == "paced" and row.get("fast") == "1":
+            key = (row["variant"], row.get("slow", "off"))
             cells.setdefault(key, []).append(row)
-    out = ["| variant | slow | relay | runs | metric | body mean | mean | p50 | p99 | p99.9 "
-           "| max |",
-           "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for (variant, slow, relay), cell_rows in sorted(cells.items()):
+    out = ["| variant | slow | runs | metric | body mean | mean | p50 | p99 | p99.9 | max |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
+    for (variant, slow), cell_rows in sorted(cells.items()):
         for metric in ("hop", "e2e"):
             body_mean = column_median(cell_rows, metric + "_mean_body_ns")
             mean = column_median(cell_rows, metric + "_mean_ns")
             percentiles = [format_ticks(column_median(cell_rows, "%s_%s" % (metric, percentile)))
                            for percentile in ("p50", "p99", "p999", "max")]
-            out.append("| %s | %s | %s | %d | %s | %s | %s | %s |" % (
-                variant, slow, "on" if relay == "1" else "off", len(cell_rows), metric,
+            out.append("| %s | %s | %d | %s | %s | %s | %s |" % (
+                variant, slow, len(cell_rows), metric,
                 "" if body_mean is None else "%.1f ns" % body_mean,
                 "" if mean is None else "%.1f ns" % mean,
                 " | ".join(percentiles)))
@@ -136,11 +139,25 @@ def per_variant_tables(rows):
     return out
 
 
+def counts_on_disk(root):
+    """(runs, comparisons) of the report.md already in root, (0, 0) if there is none."""
+    try:
+        with open(os.path.join(root, "report.md")) as report_file:
+            counts = COUNTS_LINE.search(report_file.read())
+    except OSError:
+        return 0, 0
+    return (int(counts.group(1)), int(counts.group(2))) if counts else (0, 0)
+
+
 def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1:
-        sys.exit(__doc__)
-    root = argv[0]
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("results", help="the tree to read; report.md and runs.csv go here")
+    parser.add_argument("--campaign", default="", help="the campaign the report covers")
+    parser.add_argument("--force", action="store_true",
+                        help="write even with no comparison, or fewer runs than already there")
+    args = parser.parse_args(argv)
+    root = args.results
     rows = []
     for path in find_files(root, "row.csv"):
         with open(path) as row_file:
@@ -149,11 +166,23 @@ def main(argv=None):
     for path in find_files(root, "result.json"):
         with open(path) as result_file:
             results.append(json.load(result_file))
+    runs_there, comparisons_there = counts_on_disk(root)
+    if not args.force and not results:
+        print("report: no result.json under %s (compare.py writes them; results/raw is not in the "
+              "repo); nothing written, --force writes anyway" % root, file=sys.stderr)
+        return 1
+    if not args.force and (len(rows) < runs_there or len(results) < comparisons_there):
+        print("report: %s already reports %d runs and %d comparisons, and only %d and %d are "
+              "under it; nothing written, --force writes anyway"
+              % (root, runs_there, comparisons_there, len(rows), len(results)), file=sys.stderr)
+        return 1
     valid_count = sum(row.get("valid") == "1" for row in rows)
-    report_lines = ["# mdbus benchmark report", "",
-                    "Runs: %d (%d valid). Comparisons: %d." % (len(rows), valid_count,
-                                                                len(results)),
-                    "", "## Comparisons (B - A over counterbalanced pairs)", ""]
+    report_lines = ["# mdbus benchmark report", ""]
+    if args.campaign:
+        report_lines += ["Campaign: %s" % args.campaign, ""]
+    report_lines += ["Runs: %d (%d valid). Comparisons: %d." % (len(rows), valid_count,
+                                                                 len(results)),
+                     "", "## Comparisons (B - A over counterbalanced pairs)", ""]
     report_lines += comparison_table(results)
     report_lines += ["", "## Latency per variant (medians over valid runs)", ""]
     report_lines += per_variant_tables(rows)

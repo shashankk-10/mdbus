@@ -1,8 +1,6 @@
 #pragma once
 
 // SharedMemoryMapping: one mmap of named or anonymous shared memory, pre-faulted and locked.
-// - BusWriter creates a bus segment with create(), BusReader maps it with open(); in-process
-//   tests and benches use create_anonymous() and skip the shm name.
 // - Knows nothing about what is inside the memory: segment_format.hpp lays the bus out in it,
 //   and bus_paths.hpp picks the name.
 
@@ -24,7 +22,7 @@
 
 namespace mdbus {
 
-// Readers map ReadOnly, so a buggy reader faults instead of corrupting the bus for everyone.
+// Readers map ReadOnly (PROT_READ), the writer ReadWrite.
 enum class Access : std::uint8_t { ReadOnly, ReadWrite };
 
 // Move-only owner of one mapping; unmaps it on destruction.
@@ -62,8 +60,9 @@ class SharedMemoryMapping {
 
   // Creates the shm object `name` (it must not exist yet), sizes it and maps it read-write.
   // - AlreadyExists if the name is taken; SystemCallFailed for any other error.
-  // - macOS allows exactly one ftruncate on a shm object, so size_bytes is final. If the
-  //   ftruncate fails, the object is unlinked again rather than left at size 0.
+  // - macOS allows exactly one ftruncate on a shm object, so size_bytes is final.
+  // - If the ftruncate or the mmap fails, the object it just created is unlinked again rather
+  //   than left half made. An object it did not create is never unlinked.
   Status create(const std::string& name, std::size_t size_bytes) {
     unmap();
     const int shm_fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, kOwnerOnlyFileMode);
@@ -71,15 +70,17 @@ class SharedMemoryMapping {
       if (errno == EEXIST) return Status::AlreadyExists;
       return Status::SystemCallFailed;
     }
-    if (ftruncate(shm_fd, static_cast<off_t>(size_bytes)) == 0) {
-      return map(shm_fd, size_bytes, Access::ReadWrite);
-    }
-    ::close(shm_fd);
-    shm_unlink(name.c_str());
-    return Status::SystemCallFailed;
+    Status status = Status::SystemCallFailed;
+    if (ftruncate(shm_fd, static_cast<off_t>(size_bytes)) == 0)
+      status = map(shm_fd, size_bytes, Access::ReadWrite);  // map() closes shm_fd
+    else
+      ::close(shm_fd);
+    if (status != Status::Ok) shm_unlink(name.c_str());
+    return status;
   }
 
-  // Maps an existing shm object, all of it, if it is at least min_size_bytes long.
+  // Maps an existing shm object, all of it, if this user owns it and it is at least
+  // min_size_bytes long.
   // - NoSuchBus: no object has that name.
   // - NotReady: the object has size 0, so its creator has not run ftruncate yet.
   // - NotABusSegment: it is non-empty but shorter than min_size_bytes.
@@ -96,8 +97,11 @@ class SharedMemoryMapping {
     }
 
     struct stat info{};
-    std::size_t object_bytes = 0;
-    if (fstat(shm_fd, &info) == 0) object_bytes = static_cast<std::size_t>(info.st_size);
+    if (fstat(shm_fd, &info) != 0) {
+      ::close(shm_fd);
+      return Status::SystemCallFailed;
+    }
+    const auto object_bytes = static_cast<std::size_t>(info.st_size);
     if (object_bytes != 0 && object_bytes >= min_size_bytes) {
       return map(shm_fd, object_bytes, access);
     }
@@ -106,7 +110,7 @@ class SharedMemoryMapping {
     return Status::NotABusSegment;
   }
 
-  // Anonymous shared memory for one process (tests, benches); aborts if mmap fails.
+  // Test-only: anonymous shared memory for one process, no shm name; aborts if mmap fails.
   static SharedMemoryMapping create_anonymous(std::size_t size_bytes) {
     SharedMemoryMapping mapping;
     check_or_abort(mapping.map(-1, size_bytes, Access::ReadWrite) == Status::Ok,

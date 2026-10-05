@@ -1,15 +1,14 @@
 #pragma once
 
 // The core protocol: how one message gets into a slot, and how a reader gets it back out.
-// - RingWriter::publish(): used by Publisher in the feed handler. Never waits for a reader and
-//   does not know how many readers there are.
-// - RingReader::try_poll(): used by Consumer. Copies one slot and reports Ok, NotWrittenYet or
-//   Lapped. Readers write no shared memory.
+// - RingWriter::publish() never waits for a reader and does not know how many readers there are.
+// - RingReader::try_poll() copies one slot and reports Ok, NotWrittenYet or Lapped.
 // - The slot (stamp + 7 payload words, padded to 128 B) is in ring_slot.hpp; the head hint is in
 //   control_block.hpp.
 // - Stamp of message seq: 2*seq+1 while it is being written, 2*seq+2 once complete, 0 if the slot
-//   was never written. Putting seq in the stamp is what lets a reader tell "my message" from "the
-//   message one lap later" (a plain seqlock counter cannot).
+//   was never written (below every complete stamp, so try_poll reports NotWrittenYet). Putting seq
+//   in the stamp is what lets a reader tell "my message" from "the message one lap later" (a plain
+//   seqlock counter cannot).
 // - Terms. lap: the writer went once round the ring and overwrote a slot this reader had not
 //   read. acquire / release: a release store makes every earlier write visible to whoever later
 //   reads that value with an acquire load. head hint: the next seq to publish, stored every 64
@@ -37,13 +36,11 @@ constexpr std::uint64_t stamp_when_written(std::uint64_t seq) {
   return 2 * seq + 2;
 }
 
-// A slot nobody has written; 0 < 2 = stamp_when_written(0), so try_poll reports NotWrittenYet.
-constexpr std::uint64_t kNeverWrittenStamp = 0;
-static_assert(kNeverWrittenStamp < stamp_when_written(0));
-
 // The ring's one writer; the writer's flock keeps it to one process.
-// - publish() is wait-free: a straight line of stores, no loop, no compare-and-swap, and no read
-//   of anything a reader writes.
+// - publish() is wait-free: a bounded number of steps, with no loop, no compare-and-swap and no
+//   read of anything a reader writes. Not quite a straight line: every 64th publish also stores
+//   the head hint, and every 1024th reads the clock for the heartbeat (about 17 ns, no system
+//   call).
 // - Layout supplies kSlotCount, kPayloadWords, kSlotBytes and PayloadWords (BusLayout does).
 template <class Atomics, class Layout>
 class RingWriter {
@@ -70,8 +67,6 @@ class RingWriter {
   // Writes `words` into the slot of the next seq and makes it visible to readers.
   // - Publisher builds the payload in registers and this inlines into it, so between the odd and
   //   the even stamp the writer only stores.
-  // - Example: on a fresh writer, publish(words) puts seq 0 in slot 0 (stamp 1, then 2) and
-  //   next_seq() becomes 1; the 64th publish (seq 63) also stores head hint 64.
   void publish(const PayloadWords& words) {
     const std::uint64_t seq = next_seq_to_publish;
     next_seq_to_publish = seq + 1;
@@ -95,8 +90,6 @@ class RingWriter {
   }
 
   // Stores a heartbeat if kHeartbeatPeriodNs (1 ms) has passed since the last one.
-  // - publish() calls it every 1024 publishes; the writer's idle loop calls it too, so a quiet
-  //   writer still looks alive.
   void heartbeat_if_due() {
     const std::uint64_t now_ns = steady_clock_ns();
     if (now_ns - last_heartbeat_ns >= kHeartbeatPeriodNs) write_heartbeat(now_ns);
@@ -112,10 +105,7 @@ class RingWriter {
   }
 };
 
-// What one try_poll found.
-// - NotWrittenYet: the writer has not finished seq yet; poll the same seq again later.
-// - Ok: the payload holds message seq.
-// - Lapped: the writer has moved past seq, so it is gone; resume from the head hint.
+// What one try_poll found (try_poll says when each one comes back).
 enum class TryPollResult : std::uint8_t { NotWrittenYet, Ok, Lapped };
 
 // One reader's view of the ring. Holds no position: Consumer passes the seq it wants.
@@ -142,8 +132,8 @@ class RingReader {
   // - Lapped: the slot already holds a later message, or changed while we copied (a torn copy).
   //   Never retried: the slot only changes again for seq + slot count, so seq is gone.
   // - Why poll the slot and not a global head: one line moves per message instead of two in
-  //   series. Measured: polling a head costs about 40% more per hop (DESIGN.md Results,
-  //   "Readers poll a global head").
+  //   series. Measured: polling a head costs 33% more per hop (DESIGN.md §8.3, "Poll a
+  //   global head instead of the slot stamp": 91.3 -> 121.0 ns).
   // Example (16384 slots, so seq 41 lives in slot 41):
   //   stamp 84 before and after the copy  -> Ok
   //   stamp 83 (writing seq 41) or 0      -> NotWrittenYet
@@ -169,7 +159,7 @@ class RingReader {
                                                                   : TryPollResult::Lapped;
   }
 
-  // Read on attach and after a lap; it trails the true next seq by 0..63.
+  // Read on attach and after a lap.
   std::uint64_t head_hint() const {
     return Atomics::load_acquire(control->head_hint.next_seq);
   }

@@ -1,11 +1,9 @@
 #pragma once
 
-// The book ladder: the policies of the book I started from, and the configs F0..F4 that walk
-// from it to the final book one policy at a time.
-// - Not part of the system. bench/feed_bench.cpp builds one binary per config (the F0..F4
-//   names are CMake macro values) and measures each step.
-// - The oracle test replays the same events through every config and checks each against F0.
-// - The table of what each step changes sits above the F4..F0 structs at the bottom.
+// The book ladder: the policies of the book I started from (F0), and the configs that walk from
+// it to the final book one policy at a time. The table of steps is at the bottom.
+// - Not part of the system: each config is measured on its own (one feed_bench binary per
+//   config, named by a CMake macro) and checked against F0 by the oracle test.
 
 #include <cstddef>
 #include <cstdint>
@@ -18,9 +16,6 @@
 #include "mdbus/book/feed_book.hpp"
 
 namespace mdbus::baseline {
-
-// Prefetch policy for F3 and below: look zero events ahead, so no prefetch is issued.
-struct NoPrefetch { static constexpr std::size_t kEventsAhead = 0; };
 
 // F0's level policy: one std::map per instrument side, one heap node per price level.
 // - Keys are price offsets, negated for bids, so begin() is always the best level and
@@ -136,34 +131,35 @@ class UnorderedMapIndex {
 //   compare but no allocation.
 class InstrumentLookupBySymbol {
  private:
-  static constexpr std::size_t kSymbolChars = 8;  // ITCH symbol: 8 ASCII characters, space padded
-
   std::unordered_map<std::string, std::uint16_t> ids;
 
  public:
   explicit InstrumentLookupBySymbol(const std::vector<book::InstrumentInfo>& instrument_list) {
     for (std::size_t i = 0; i < instrument_list.size(); ++i) {
-      ids.emplace(std::string(instrument_list[i].symbol.data(), kSymbolChars),
+      ids.emplace(std::string(instrument_list[i].symbol.data(), book::kSymbolLength),
                   static_cast<std::uint16_t>(i));
     }
   }
 
   std::uint16_t find_instrument(const book::OrderEvent& event) const {
-    const auto it = ids.find(std::string(event.symbol.data(), kSymbolChars));
+    const auto it = ids.find(std::string(event.symbol.data(), book::kSymbolLength));
     if (it == ids.end()) return book::kNoInstrument;
     return it->second;
   }
 };
 
-// The ladder, F0 first. Each row names the one policy that step changes from the row above.
-//   F0  price levels in a std::map (StdMapLevels): the book I started from
-//   F1  levels in the flat ladder; orders still in a node hash map (UnorderedMapIndex)
-//   F2  orders in the open-addressed table; instruments still found by symbol
-//   F3  instruments found by id; no prefetch yet (NoPrefetch)
-//   F4  prefetch on: the final book (book::FinalBookConfig)
-// In code each config is the one above it in this table with one improvement taken back.
+// The ladder: five configs, F0..F4, and four steps of one policy each.
+//   F0 -> F1  LevelPolicy:          StdMapLevels (a std::map per side) -> PriceLadder
+//   F1 -> F2  OrderIndexPolicy:     UnorderedMapIndex (a node per order) -> OrderTable
+//   F2 -> F3  LookupPolicy:         InstrumentLookupBySymbol -> InstrumentLookupById
+//   F3 -> F4  kPrefetchEventsAhead: 0 -> 4 (F4 is book::FinalBookConfig)
+// In code each config is the next one with that step taken back: F3 is F4 without the prefetch,
+// and so on down to F0.
 struct F4 : book::FinalBookConfig { static constexpr const char* kName = "F4"; };
-struct F3 : F4 { using PrefetchPolicy = NoPrefetch; static constexpr const char* kName = "F3"; };
+struct F3 : F4 {
+  static constexpr std::size_t kPrefetchEventsAhead = 0;  // no prefetch is issued
+  static constexpr const char* kName = "F3";
+};
 struct F2 : F3 {
   using LookupPolicy = InstrumentLookupBySymbol;
   static constexpr const char* kName = "F2";

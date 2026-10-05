@@ -2,7 +2,7 @@
 # Builds and tests the repo three ways, each in its own directory: as is, under ASan + UBSan,
 # and under TSan. Any compiler warning or failing test stops it.
 #   scripts/check.sh    BUILD_ROOT (default /tmp/mdbus-check) and JOBS override.
-# JOBS defaults to 4, one per P-core.
+# JOBS defaults to 4, one per P-core of an M1.
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 build_root="${BUILD_ROOT:-/tmp/mdbus-check}"

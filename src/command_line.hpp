@@ -1,17 +1,16 @@
 #pragma once
 
-// Command-line pieces shared by mdbus_exchange_sim, mdbus_feed_handler and mdbus_watch.
-// - Exit codes, and strict number parsing for "--name value" options.
-// - The simulator and the feed handler both take --seed and --instruments: the feed handler
-//   derives the same instrument list (symbols and reference prices) from them as the simulator
-//   streams from, so nothing about the instruments goes over the wire.
+// Command-line pieces shared by mdbus_exchange_sim, mdbus_feed_handler and mdbus_watch: exit
+// codes, strict number parsing, and the option loop of the two feed programs.
+
+#include <netinet/in.h>
 
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
 
-#include "sim/order_event_generator.hpp"
+#include "mdbus/feed/multicast_socket.hpp"
 
 namespace mdbus {
 
@@ -19,7 +18,7 @@ namespace mdbus {
 constexpr int kExitOk = 0;
 constexpr int kExitSendFailed = 1;  // mdbus_exchange_sim: a send failed
 constexpr int kExitBadCommandLine = 2;
-constexpr int kExitSetupFailed = 3;  // a socket or the bus could not be opened
+constexpr int kExitSetupFailed = 3;  // a socket or the bus could not be opened (or locked)
 
 // Parses the whole text as an unsigned decimal number; value is written only on success.
 // - Why not strtoull alone: it accepts leading spaces, a minus sign (wrapping "-1" to 2^64-1)
@@ -37,8 +36,7 @@ inline bool parse_unsigned(const std::string& text, std::uint64_t& value) {
   return true;
 }
 
-// A UDP port, 1..65535.
-// Example: "30001" -> true, port 30001;  "0", "70000" -> false, port untouched
+// A UDP port, 1..65535; port is written only on success.
 inline bool parse_port(const std::string& text, std::uint16_t& port) {
   std::uint64_t number = 0;
   if (!parse_unsigned(text, number) || number == 0 || number > UINT16_MAX) return false;
@@ -46,26 +44,33 @@ inline bool parse_port(const std::string& text, std::uint16_t& port) {
   return true;
 }
 
-// Stores a --seed or --instruments value into config. False for any other key, or a bad value.
-// Example:
-//   ("--seed", "7")             -> true, config.seed 7
-//   ("--instruments", "65535")  -> false (65535 is kNoInstrument)
-//   ("--port", "1")             -> false (a key it does not own)
-inline bool parse_seed_or_instruments(const std::string& key, const std::string& value,
-                                      book::GeneratorConfig& config) {
-  std::uint64_t number = 0;
-  if (!parse_unsigned(value, number)) return false;
-  if (key == "--seed") {
-    config.seed = number;
-    return true;
+// The command line of the two feed programs, mdbus_exchange_sim and mdbus_feed_handler.
+// - Every option is a "--name value" pair, and both take the multicast group the feed travels
+//   on: --group ADDR --port P, both required.
+// - Reads --group and --port itself and hands every other pair to parse_option(key, value),
+//   which takes the program's own keys and is false for any other key or a bad value.
+// - False if an option lacks its value, a pair is refused, or the group is missing or not a
+//   multicast address.
+template <class ParseOption>
+bool parse_feed_command_line(int argc, char** argv, sockaddr_in& group_address,
+                             ParseOption&& parse_option) {
+  if (argc % 2 == 0) return false;  // an option without its value
+  std::string group_text;
+  std::uint16_t port = 0;
+  for (int i = 1; i < argc; i += 2) {
+    const std::string key = argv[i];
+    const std::string value = argv[i + 1];
+    bool option_ok = true;
+    if (key == "--group") {
+      group_text = value;
+    } else if (key == "--port") {
+      option_ok = parse_port(value, port);
+    } else {
+      option_ok = parse_option(key, value);
+    }
+    if (!option_ok) return false;
   }
-  if (key == "--instruments") {
-    // Ids are 16-bit; 0xFFFF (book::kNoInstrument) means no instrument.
-    if (number == 0 || number >= book::kNoInstrument) return false;
-    config.instrument_count = static_cast<std::uint32_t>(number);
-    return true;
-  }
-  return false;
+  return port != 0 && make_multicast_address(group_text, port, group_address);
 }
 
 }  // namespace mdbus

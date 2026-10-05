@@ -4,11 +4,13 @@
 //   MDBUS_FEED_VARIANT).
 // - The stream is generated up front and copied in 64 KB chunks into a small arena, one timed
 //   batch per chunk, so streaming the input never evicts the book from cache.
-// - A fresh book reaches steady state through an untimed warm-up. Timed batches go through
-//   apply_batch, so the prefetch step runs as it does in the feed handler.
+// - A fresh book reaches steady state through an untimed warm-up. Timed batches of 1365 events
+//   go through apply_batch, the feed handler's entry point. The handler's batches are one packet
+//   (at most 10 events), whose first 4 are never prefetched, so the prefetch gain here is an
+//   upper bound for it.
 // - Gates: F0 and F1 allocate per event, so they are exempt from the page-fault gate. A run whose
 //   book refused any add is invalid: the refusal path would be timed instead of the book.
-// - Exit codes: 0 ok, 2 the row could not be written, 4 smoke run measured nothing.
+// - Exit codes: bench_args.hpp's.
 
 #include <algorithm>
 #include <cstdio>
@@ -30,9 +32,6 @@ using BenchBook = book::FeedBook<BookConfig>;
 
 namespace {
 
-constexpr int kExitRowNotWritten = 2;
-constexpr int kExitSmokeFailed = 4;  // --smoke and the run measured nothing
-
 // Half the P-core's 128 KB L1D: the chunk and the book's hot lines both fit.
 constexpr std::size_t kChunkBytes = 64 * 1024;
 constexpr std::size_t kEventsPerChunk = kChunkBytes / sizeof(book::OrderEvent);
@@ -43,6 +42,15 @@ constexpr std::size_t kWarmupEventsPerLiveOrder = 2;
 
 constexpr double kDefaultLiveOrders = 16384;  // --live: resting orders the generator aims for
 constexpr double kDefaultEventCount = 1e6;    // --events: timed events per run
+
+// The command line (bench_args.hpp).
+constexpr const char* kUsage = "[--events N] [--live N] [--seed N] [--smoke 0|1] [--out DIR]";
+constexpr OptionRule kOptionRules[] = {
+    {.key = "--events", .min_value = 1},                         // 0 would time nothing
+    {.key = "--live", .min_value = 1, .max_value = UINT32_MAX},  // the generator needs one
+    {.key = "--seed"},
+    {.key = "--smoke", .max_value = 1},
+};
 
 // The row just written, in two lines.
 void print_feed_summary(const ResultRow& row) {
@@ -123,7 +131,10 @@ int main(int argc, char** argv) {
 
   const bool wrote = finish_row(row, failed_gates, out);
   print_feed_summary(row);
-  if (args.number("--smoke", 0) != 0 && row.number("ns_per_event") <= 0) return kExitSmokeFailed;
-  if (!wrote) return kExitRowNotWritten;
+  if (args.number("--smoke", 0) != 0 && row.number("ns_per_event") <= 0)
+    return kExitMeasuredNothing;
+  if (!wrote) return kExitRunFailed;
   return 0;
 }
+
+const CommandLineRules mdbus::bench::kCommandLineRules{kUsage, kOptionRules};

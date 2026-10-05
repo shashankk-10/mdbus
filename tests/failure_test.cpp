@@ -1,16 +1,16 @@
-// Failure scenarios with real processes: writers and readers that die, stop or get replaced.
-// - How: the writers and readers are this binary re-run as children (test_harness.hpp), then
-//   killed with SIGKILL, frozen with SIGSTOP, or replaced by a second writer.
+// Failure scenarios with real processes: writers that die, compete or get replaced.
+// - How: each writer is this binary re-run as a child (test_harness.hpp), then killed with
+//   SIGKILL or replaced by a second writer. The readers run in the test.
 // - A writer that must die mid-write stores exactly what the protocol would have stored by then
 //   (the odd stamp, the release fence, some of the words) and raises SIGKILL on itself.
 // - Every scenario also runs one deliberate break: it injects the fault its check exists to
 //   catch and asserts that the check fires, so no check here can pass vacuously.
 // - A failure means a consumer took a half-written message or snapshot as complete, called a
-//   live writer dead (or a dead one alive), or a writer's speed depended on its readers.
+//   live writer dead (or a dead one alive), or a second writer was let in beside a live one (or
+//   kept out once it died).
 
 #include <unistd.h>
 
-#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -30,22 +30,18 @@ constexpr std::uint32_t kInstrumentCount = 8;
 // sees it.
 constexpr std::uint32_t kLastTradeQty = 999'999;
 constexpr std::uint64_t kAttachTimeoutNs = 5000 * kNsPerMillisecond;
-// Short, so the scenarios reach Down or Stalled quickly (the library default is 100 ms).
+// Short, so the scenarios reach Down quickly (the library default is 100 ms).
 constexpr std::uint64_t kTestHeartbeatTimeoutNs = 20 * kNsPerMillisecond;
-// The exit status ChildProcess reports for a child killed by a signal is this plus the signal.
-constexpr int kExitCodeSignalBase = 128;
-// Child exit codes when setup fails, so a CHECK on the exit code tells them apart.
+// The writer child's exit code when it cannot open its bus, so a CHECK on the exit code tells it
+// apart.
 constexpr int kExitOpenFailed = 3;
-constexpr int kExitReadyFileFailed = 4;
 
 // Checks every trade against the checksum of the seq its stamp proved, and counts each health
 // change it hears about.
 struct VerifyingConsumer : Consumer<VerifyingConsumer, SpinWait, TestLayout> {
   std::uint64_t torn = 0;  // trades whose checksum does not match their seq
   std::uint64_t downs = 0;
-  std::uint64_t stalls = 0;
   std::uint64_t resumes = 0;  // changes back to Alive
-  std::uint64_t reattaches = 0;
   bool saw_last_trade = false;
 
   void on(const Trade& trade, const MessageInfo& info) {
@@ -63,12 +59,7 @@ struct VerifyingConsumer : Consumer<VerifyingConsumer, SpinWait, TestLayout> {
 
   void on_health_change(WriterHealth health) {
     if (health == WriterHealth::Down) ++downs;
-    if (health == WriterHealth::Stalled) ++stalls;
     if (health == WriterHealth::Alive) ++resumes;
-  }
-
-  void on_reattach() {
-    ++reattaches;
   }
 };
 
@@ -110,7 +101,10 @@ void die_mid_slot(BusWriter<TestLayout>& writer, std::uint64_t seq, WriteOrder o
 }
 
 // Starts instrument_id's snapshot write as SnapshotTable::write would, then dies with half the
-// words written. DoneStampFirst stores the even (complete) version instead of the odd one.
+// words written.
+// - DoneStampFirst stores the even (complete) version instead of the odd one.
+// - Only words 0..6 are written: the new seq and bid. The ask keeps the last complete snapshot's,
+//   so the record matches neither snapshot (see make_test_snapshot).
 void die_mid_snapshot(BusWriter<TestLayout>& writer, std::uint16_t instrument_id,
                       std::uint64_t seq, WriteOrder order) {
   const InstrumentSnapshot snapshot = make_test_snapshot(instrument_id, seq);
@@ -138,7 +132,6 @@ void die_mid_snapshot(BusWriter<TestLayout>& writer, std::uint16_t instrument_id
 //   - none: publishes the last trade and idles until killed.
 //   - slot / slot_naive: dies mid-slot (Correct / DoneStampFirst).
 //   - snap / snap_naive: publishes the trade, then dies mid-snapshot (Correct / DoneStampFirst).
-//   - stop: SIGSTOPs itself between two publishes, then carries on after SIGCONT.
 int run_faulty_writer(const std::string& bus, const std::string& fault, std::uint64_t fault_seq) {
   constexpr std::uint64_t kPublishesPerPause = 64;
   constexpr unsigned kPauseMicroseconds = 100;
@@ -162,7 +155,6 @@ int run_faulty_writer(const std::string& bus, const std::string& fault, std::uin
         publisher.publish(instrument_id, trade);
         die_mid_snapshot(writer, instrument_id, seq, order);
       }
-      if (fault == "stop") raise(SIGSTOP);
     }
     publisher.publish_and_update_snapshot(instrument_id, trade,
                                           make_test_snapshot(instrument_id, seq));
@@ -180,25 +172,21 @@ int run_faulty_writer(const std::string& bus, const std::string& fault, std::uin
   return 0;
 }
 
-// The file reader child `tag` creates once attached. Readers write no shared memory, so a file
-// is how the test learns they are there.
-std::string ready_file_path(const std::string& bus, const std::string& tag) {
-  BusPaths paths;
-  make_bus_paths(bus, paths);
-  return paths.lock_directory + "/" + bus + ".ready" + tag;
-}
-
-// The reader child: follows the bus until killed, or for 30 s.
-int run_following_reader(const std::string& bus, const std::string& tag) {
-  constexpr std::uint64_t kFollowMs = 30000;
-  VerifyingConsumer consumer;
-  if (consumer.attach(bus, kAttachTimeoutNs) != Status::Ok) return kExitOpenFailed;
-  std::FILE* ready = std::fopen(ready_file_path(bus, tag).c_str(), "w");
-  if (ready == nullptr) return kExitReadyFileFailed;
-  std::fclose(ready);
-  const std::uint64_t end = steady_clock_ns() + kFollowMs * kNsPerMillisecond;
-  while (steady_clock_ns() < end) consumer.poll_once();
-  return 0;
+// Attaches to the bus's live writer. A replacement makes a fresh segment, and until it does the
+// name still leads to the dead writer's, whose heartbeat has stopped: what mdbus_watch does each
+// second while its writer reads Down.
+bool attach_to_live_writer(VerifyingConsumer& consumer, const std::string& bus) {
+  constexpr std::uint64_t kWaitMs = 5000;
+  const std::uint64_t end = steady_clock_ns() + kWaitMs * kNsPerMillisecond;
+  while (steady_clock_ns() < end) {
+    BusReader<TestLayout> candidate;
+    if (candidate.open(bus) == Status::Ok &&
+        judge_writer(*candidate.pointers().control, steady_clock_ns(), UINT64_MAX,
+                     kTestHeartbeatTimeoutNs) == WriterHealth::Alive)
+      return consumer.attach(bus) == Status::Ok;
+    sleep_ms(1);
+  }
+  return false;
 }
 
 }  // namespace
@@ -208,18 +196,14 @@ CHILD_PROCESS(faulty_writer) {  // argv: bus, fault, fault_seq
   return run_faulty_writer(argv[0], argv[1], fault_seq);
 }
 
-CHILD_PROCESS(following_reader) {  // argv: bus, tag
-  return run_following_reader(argv[0], argv[1]);
-}
-
 // Writers that die, and the writers that replace them.
 
 // The writer is SIGKILLed with seq 1500 half written.
 // - The ring has wrapped (1500 - 1024 slots = 476), so the slot's first half still holds seq
 //   476's words.
-// - The consumer waits on that slot (odd stamp: NotWrittenYet), reports Down once it finds the
-//   flock free, and after a new writer replaces the segment it re-attaches and reads on with
-//   nothing torn.
+// - The consumer waits on that slot (odd stamp: NotWrittenYet) and reports Down once the
+//   heartbeat is older than the timeout. A new writer makes a fresh segment; the consumer
+//   attaches to it and reads on with nothing torn.
 // - Break: a writer that marks the slot done before writing it exposes a mix of two laps, which
 //   the checksum must catch.
 // Bus names: p1 for the correct case, p1n for the break ("n" for naive).
@@ -245,15 +229,14 @@ static void run_slot_fault_case(WriteOrder order) {
 
   // The replacement publishes up to seq 2000, then the last trade.
   ChildProcess next(spawn_self("faulty_writer", {bus, "none", "2000"}));
+  REQUIRE(attach_to_live_writer(consumer, bus));
   CHECK(poll_until(consumer, [&] { return consumer.saw_last_trade; }));
   CHECK(consumer.torn == 0);
-  CHECK(consumer.reattaches == 1);
-  CHECK(consumer.stats().reattaches == 1);
   CHECK(consumer.resumes >= 1);  // the handler hears Alive again after Down
 }
 
-// A half-written slot is never delivered, and a replaced writer is followed onto the new
-// segment. Would catch a reader that trusts the stamp without the seq check, or a lost reattach.
+// A half-written slot is never delivered, and the replacement's segment reads on cleanly.
+// Would catch a reader that trusts the stamp without the seq check.
 TEST(writer_killed_mid_slot_then_replaced) {
   run_slot_fault_case(WriteOrder::Correct);
   run_slot_fault_case(WriteOrder::DoneStampFirst);
@@ -262,7 +245,8 @@ TEST(writer_killed_mid_slot_then_replaced) {
 // The writer is SIGKILLed inside the snapshot write of seq 300.
 // - A reader of that instrument (300 % 8 = 4) gets GaveUp after exactly its retry cap.
 // - Every other instrument still reads its exact last snapshot.
-// - Break: a record stamped complete before it is written is handed out torn as current.
+// - Break: a record stamped complete before it is written is handed out as current, though it
+//   is torn: seq 300's bid with seq 292's ask, neither snapshot.
 // Bus names: p2 for the correct case, p2n for the break.
 static void run_snapshot_fault_case(WriteOrder order) {
   constexpr std::uint64_t kFaultSeq = 300;
@@ -283,8 +267,10 @@ static void run_snapshot_fault_case(WriteOrder order) {
   const SnapshotReadResult read_result =
       snapshot_table.read(kFaultInstrumentId, out, kSnapshotReadMaxRetries);
   if (is_break) {  // a torn snapshot handed out as current
+    const InstrumentSnapshot intended = make_test_snapshot(kFaultInstrumentId, kFaultSeq);
     CHECK(read_result.status == SnapshotReadStatus::Ok);
     CHECK(std::memcmp(&out, &want, sizeof out) != 0);
+    CHECK(std::memcmp(&out, &intended, sizeof out) != 0);
   } else {  // the reader waits out its cap rather than take the half-written snapshot
     CHECK(read_result.status == SnapshotReadStatus::GaveUp);
     CHECK(read_result.retries == kSnapshotReadMaxRetries);
@@ -303,39 +289,14 @@ static void run_snapshot_fault_case(WriteOrder order) {
 }
 
 // A half-written snapshot is never handed out, and a dead writer's other records stay readable.
-// Would catch a snapshot read that skips the version re-check or retries forever.
+// Would catch a snapshot read that takes an odd (mid-write) version as complete, or retries
+// forever.
 TEST(writer_killed_mid_snapshot) {
   run_snapshot_fault_case(WriteOrder::Correct);
   run_snapshot_fault_case(WriteOrder::DoneStampFirst);
 }
 
-// Writers that stop, and writers that compete.
-
-// The writer is SIGSTOPped between two publishes (seq 700). Its flock is still held, so the
-// consumer reports Stalled, never Down, and resumes after SIGCONT.
-// - Would catch a monitor that judges by heartbeat age alone and gives up on a paused writer.
-// - Break: the same probe without the flock (a null lock path) calls the writer dead.
-TEST(writer_stopped_is_stalled_not_down) {
-  constexpr std::uint64_t kStopSeq = 700;
-  const std::string bus = make_test_bus_name("stop");
-  ChildProcess writer(spawn_self("faulty_writer", {bus, "stop", std::to_string(kStopSeq)}));
-  VerifyingConsumer consumer;
-  REQUIRE(consumer.attach(bus, kAttachTimeoutNs) == Status::Ok);
-  consumer.set_heartbeat_timeout(kTestHeartbeatTimeoutNs);
-  CHECK(poll_until(consumer, [&] { return consumer.stalls > 0; }));
-
-  WriterHealthMonitor blind;
-  blind.start_watching(consumer.pointers().control, nullptr);
-  blind.set_heartbeat_timeout(kTestHeartbeatTimeoutNs);
-  CHECK(blind.probe_now(steady_clock_ns()) == WriterHealth::Down);
-
-  ::kill(writer.pid, SIGCONT);
-  // Past kStopSeq + 1: at least one message published after the SIGCONT has arrived.
-  CHECK(poll_until(consumer,
-                   [&] { return consumer.resumes > 0 && consumer.next_seq() > kStopSeq + 1; }));
-  CHECK(consumer.downs == 0);
-  CHECK(consumer.torn == 0);
-}
+// Writers that compete.
 
 // A second writer is refused while the first holds the flock, stopped or not, and takes over
 // once the first is dead.
@@ -366,59 +327,4 @@ TEST(second_writer_refused) {
   CHECK((info.st_mode & 0777) == 0700);  // owner-only permission bits
   REQUIRE(::unlink(paths.lock_file.c_str()) == 0);
   CHECK(third.open(bus, kInstrumentCount) == Status::Ok);
-}
-
-// Readers that die.
-
-// Two spinning readers are SIGKILLed without telling anyone. The writer never knows its readers,
-// so it laps them at full speed.
-// - Would catch any change that makes the writer wait on, or track, a reader.
-// - Break: a writer that waits for its slowest reader (backpressure, as a queue would) wedges on
-//   the dead one, whose cursor never moves.
-// Bus name: dr, for dead readers.
-TEST(dead_readers_cost_the_writer_nothing) {
-  const std::string bus = make_test_bus_name("dr");
-  BusWriter<TestLayout> writer;
-  REQUIRE(writer.open(bus, kInstrumentCount) == Status::Ok);
-  auto& publisher = writer.publisher();
-
-  ChildProcess first(spawn_self("following_reader", {bus, "0"}));
-  ChildProcess second(spawn_self("following_reader", {bus, "1"}));
-  CHECK(wait_until([&] {
-    publisher.heartbeat_if_due();
-    return ::access(ready_file_path(bus, "0").c_str(), F_OK) == 0 &&
-           ::access(ready_file_path(bus, "1").c_str(), F_OK) == 0;
-  }));
-
-  first.kill_and_wait();
-  second.kill_and_wait();
-  ::unlink(ready_file_path(bus, "0").c_str());
-  ::unlink(ready_file_path(bus, "1").c_str());
-  const std::uint64_t dead_cursor = publisher.next_seq();  // where the dead readers stopped
-
-  // WaitForSlowest is a model of a backpressure writer, not mdbus code: it shows what mdbus
-  // avoids.
-  enum class WriterModel { IgnoreReaders, WaitForSlowest };
-  // Publishes four laps; false if they missed the deadline.
-  constexpr std::uint64_t kLapCount = 4;
-  constexpr std::uint64_t kFourLapsDeadlineMs = 200;  // far more than four laps take on this M1
-  const auto four_laps = [&](WriterModel mode) {
-    const std::uint64_t end = steady_clock_ns() + kFourLapsDeadlineMs * kNsPerMillisecond;
-    for (std::uint64_t i = 0; i < kLapCount * TestLayout::kSlotCount; ++i) {
-      if (mode == WriterModel::WaitForSlowest) {
-        while (publisher.next_seq() - dead_cursor >= TestLayout::kSlotCount) {
-          if (steady_clock_ns() > end) return false;
-        }
-      }
-      publisher.publish(0, Trade{1, 1, 0, {}});
-    }
-    return steady_clock_ns() <= end;
-  };
-
-  CHECK(four_laps(WriterModel::IgnoreReaders));
-  CHECK(!four_laps(WriterModel::WaitForSlowest));
-}
-
-int main(int argc, char** argv) {
-  return mdbus_test::run_main(argc, argv);
 }

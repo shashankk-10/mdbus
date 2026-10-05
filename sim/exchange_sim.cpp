@@ -1,5 +1,4 @@
-// mdbus_exchange_sim: the fake exchange at the start of the data flow (exchange -> feed
-// handler -> book -> Publisher -> ring -> Consumer).
+// mdbus_exchange_sim: the fake exchange, where the feed starts.
 // - Takes order-by-order events from OrderEventGenerator, packs up to 10 per packet in the
 //   ITCH-shaped format of wire_format.hpp, and multicasts them on 127.0.0.1 only.
 // - Sends at a fixed packet rate (--rate). Between packets it sleeps until the next send time
@@ -17,10 +16,11 @@
 #include <string>
 #include <thread>
 
-#include "src/command_line.hpp"
 #include "mdbus/clock.hpp"
 #include "mdbus/feed/multicast_socket.hpp"
 #include "mdbus/feed/wire_format.hpp"
+#include "sim/order_event_generator.hpp"
+#include "src/command_line.hpp"
 
 using namespace mdbus;
 
@@ -37,7 +37,7 @@ constexpr std::int64_t kMaxPacketsBehindSchedule = 64;
 constexpr int kEndOfStreamCopies = 3;
 constexpr std::chrono::milliseconds kEndOfStreamResendGap{1};
 
-// The simulator's settings, all from the command line. Every option is a "--name value" pair.
+// The simulator's settings, all from the command line.
 struct ExchangeConfig {
   sockaddr_in group_address{};                // --group ADDR --port P, both required
   std::uint64_t event_count = 10'000;         // --events: how many events to send in all
@@ -47,35 +47,20 @@ struct ExchangeConfig {
   book::GeneratorConfig generator_config;     // --seed, --instruments: same as the feed handler
 };
 
-// Fills config from the "--name value" pairs after the program name. False on an unknown
-// option, a bad value, or a missing --group or --port.
+// Fills config from the command line. False on an unknown option, a bad value, or a missing
+// --group or --port.
 bool parse_command_line(int argc, char** argv, ExchangeConfig& config) {
-  std::string group_text;
-  std::uint16_t port = 0;
-  const bool every_option_has_a_value = (argc - 1) % 2 == 0;
-  bool command_line_ok = every_option_has_a_value;
-  for (int i = 1; command_line_ok && i < argc; i += 2) {
-    const std::string key = argv[i];
-    const std::string value = argv[i + 1];
-    if (key == "--group") {
-      group_text = value;
-    } else if (key == "--port") {
-      command_line_ok = parse_port(value, port);
-    } else if (key == "--events") {
-      command_line_ok = parse_unsigned(value, config.event_count);
-    } else if (key == "--rate") {
-      command_line_ok =
-          parse_unsigned(value, config.packets_per_second) && config.packets_per_second > 0;
-    } else if (key == "--drop-at") {
-      command_line_ok = parse_unsigned(value, config.first_dropped_packet);
-    } else if (key == "--drop-count") {
-      command_line_ok = parse_unsigned(value, config.dropped_packet_count);
-    } else {
-      command_line_ok = parse_seed_or_instruments(key, value, config.generator_config);
-    }
-  }
-  return command_line_ok && port != 0 &&
-         make_multicast_address(group_text, port, config.group_address);
+  return parse_feed_command_line(
+      argc, argv, config.group_address, [&](const std::string& key, const std::string& value) {
+        if (key == "--events") return parse_unsigned(value, config.event_count);
+        if (key == "--rate") {
+          return parse_unsigned(value, config.packets_per_second) && config.packets_per_second > 0;
+        }
+        if (key == "--drop-at") return parse_unsigned(value, config.first_dropped_packet);
+        if (key == "--drop-count") return parse_unsigned(value, config.dropped_packet_count);
+        std::uint64_t number = 0;  // --seed or --instruments
+        return parse_unsigned(value, number) && config.generator_config.set_option(key, number);
+      });
 }
 
 // Printed when the command line is wrong.
@@ -174,9 +159,10 @@ class ExchangeFeed {
 
   // Sends the built packet, unless its number is in the drop window. A dropped packet still uses
   // up its seqs, so the receiver sees a gap.
+  // - The window test subtracts instead of adding, so a --drop-count up to 2^64 - 1 cannot wrap.
   void send_or_drop() {
     const bool drop = packets_built >= config.first_dropped_packet &&
-                      packets_built < config.first_dropped_packet + config.dropped_packet_count;
+                      packets_built - config.first_dropped_packet < config.dropped_packet_count;
     if (drop) {
       ++packets_dropped;
     } else if (!sender.send(packet_builder.data(), packet_builder.size())) {

@@ -1,9 +1,7 @@
 #pragma once
 
 // Per-instrument recovery snapshots: the snapshot, its 128 B seqlock record, and the table.
-// - Publisher::publish_and_update_snapshot writes an instrument's record right after each slot
-//   that changes it. Consumer reads one when it lost messages (a lap) and the instrument is stale.
-// - The table sits after the ring in the segment, one record per instrument (segment_format.hpp).
+// - A reader that lost messages (a lap) rebuilds an instrument's book from its snapshot.
 // - seqlock: a version counter the writer makes odd while it writes and even when done; a reader
 //   copies, then re-reads the counter, and retries if it changed.
 // - The record's version is a plain seqlock counter (4 -> 5 -> 6), not the ring's 2*seq+1 /
@@ -16,9 +14,16 @@
 #include "mdbus/atomic_policy.hpp"
 #include "mdbus/constants.hpp"
 #include "mdbus/messages.hpp"
-#include "mdbus/wait_policy.hpp"
 
 namespace mdbus {
+
+// A short pause inside a retry loop; not a wait policy.
+// - isb makes the core wait for its pipeline to drain: a real pause of tens of cycles.
+// - Why not ARM's yield: it only hints that another hardware thread could run, and M1 cores
+//   have one thread each.
+inline void spin_pause() {
+  asm volatile("isb" ::: "memory");
+}
 
 // One instrument's top levels, enough for a reader to rebuild its view of the book.
 // - bids and asks are best first; only the first bid_count / ask_count entries are real.
@@ -52,9 +57,8 @@ static_assert(sizeof(SnapshotRecord<StdAtomics>) == kCacheLineBytes &&
 // What SnapshotTable::read found.
 // - Ok: the snapshot holds a complete copy.
 // - NeverWritten: version 0, no write ever started for this instrument.
-// - GaveUp: the version stayed odd or kept moving for 1 + max_retries attempts. The writer most
-//   likely stopped mid-write (a first write interrupted also ends here); the caller keeps the
-//   instrument stale.
+// - GaveUp: the version stayed odd or kept moving for all 1 + max_retries attempts: the writer
+//   died, stopped or was descheduled mid-write (kSnapshotReadMaxRetries). The caller stays stale.
 enum class SnapshotReadStatus : std::uint8_t { Ok, NeverWritten, GaveUp };
 
 // What SnapshotTable::read returns: the status and how many extra attempts it took.
@@ -78,8 +82,6 @@ class SnapshotTable {
   // - The same store order as RingWriter::publish: odd version, release fence, words, even
   //   version with release.
   // - Only this writer stores the version, so a relaxed load returns its own last (even) store.
-  // Example: record 2 at version 4, write(2, snapshot with last_included_seq 41) -> version 6, and
-  //   read(2, out) then returns {Ok, retries 0} with out.last_included_seq == 41.
   void write(std::uint16_t instrument_id, const InstrumentSnapshot& snapshot) {
     SnapshotRecord<Atomics>& record = records[instrument_id];
     std::uint64_t words[kSnapshotWords];
@@ -100,8 +102,9 @@ class SnapshotTable {
   // Example (default max_retries 256):
   //   version 6 before and after the copy           -> {Ok, retries 0}
   //   version 5 on the first load, 6 on the second  -> {Ok, retries 1}
+  //   version 6 before the copy, 8 after it         -> {Ok, retries 1}, the newer snapshot
   //   version 0                                     -> {NeverWritten, retries 0}
-  //   version stays 7 (writer killed mid-write)     -> {GaveUp, retries 256}
+  //   version stays 7 (writer stopped mid-write)    -> {GaveUp, retries 256}
   SnapshotReadResult read(std::uint16_t instrument_id, InstrumentSnapshot& snapshot,
                           std::uint32_t max_retries = kSnapshotReadMaxRetries) const {
     const SnapshotRecord<Atomics>& record = records[instrument_id];

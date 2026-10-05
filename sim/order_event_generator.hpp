@@ -1,7 +1,8 @@
 #pragma once
 
-// The seeded order-event stream: the one workload source for the exchange simulator, the feed
-// handler's instrument list, the tests and the feed bench.
+// The seeded order-event stream: the one source of order events for the simulator, the feed
+// bench and the book and feed tests. The bus benchmarks replay a synthetic pool of their own
+// (bench/workload.hpp).
 // - Same seed, same stream: the simulator and the feed handler never exchange the instrument
 //   list, they both derive it from --seed and --instruments.
 // - Holds the live-order count at a target, so the book's order table works at a fixed size. The
@@ -9,11 +10,11 @@
 // - Cancels and executions pick a random live order, which spreads them over the whole table.
 // - In namespace mdbus::book, like the OrderEvent it produces.
 
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <random>
+#include <string_view>
 #include <vector>
 
 #include "mdbus/book/order_event.hpp"
@@ -24,10 +25,11 @@ namespace mdbus::book {
 
 // Four capital letters, the id written in base 26, padded with spaces to 8 chars: 0 -> "AAAA",
 // 1 -> "AAAB", 27 -> "AABB". Unique for every id below 26^4 = 456,976, so for every 16-bit id.
-constexpr std::array<char, 8> symbol_for_id(std::uint32_t id) {
+constexpr Symbol symbol_for_id(std::uint32_t id) {
   constexpr std::size_t kSymbolLetters = 4;
   constexpr std::uint32_t kAlphabetSize = 26;
-  std::array<char, 8> symbol{' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
+  Symbol symbol{};
+  symbol.fill(' ');
   for (std::size_t i = kSymbolLetters; i > 0; --i) {
     symbol[i - 1] = static_cast<char>('A' + id % kAlphabetSize);
     id /= kAlphabetSize;
@@ -40,6 +42,18 @@ struct GeneratorConfig {
   std::uint64_t seed = 1;
   std::uint32_t instrument_count = 64;
   std::uint32_t target_live_orders = 16 * 1024;  // live orders across all instruments
+
+  // Stores the value of --seed or --instruments. False for any other key, or an instrument
+  // count outside 1..65534 (ids are 16-bit, and 0xFFFF is kNoInstrument).
+  bool set_option(std::string_view key, std::uint64_t value) {
+    if (key == "--seed") {
+      seed = value;
+      return true;
+    }
+    if (key != "--instruments" || value == 0 || value >= kNoInstrument) return false;
+    instrument_count = static_cast<std::uint32_t>(value);
+    return true;
+  }
 };
 
 // Reference prices lie in [kMinReferencePrice, kMinReferencePrice + kReferencePriceRange), in

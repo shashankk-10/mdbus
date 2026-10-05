@@ -2,10 +2,8 @@
 
 // The exchange feed's transport: wire_format.hpp packets over UDP multicast on the loopback
 // interface (127.0.0.1), the way exchanges publish market data.
-// - MulticastSender is used by sim/exchange_sim.cpp, MulticastReceiver by src/feed_handler.cpp
-//   and tests/udp_feed_test.cpp. Data flow: exchange -> [this socket] -> feed handler.
 // - Multicast: one send reaches every socket that joined the group address.
-// - Nothing is acknowledged: a lost packet shows up only as a gap in the sequence numbers
+// - Nothing is acknowledged: a lost packet shows up only as a sequence gap
 //   (wire::SequenceGapTracker).
 
 #include <arpa/inet.h>
@@ -13,6 +11,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -34,15 +33,13 @@ inline bool make_multicast_address(const std::string& group, std::uint16_t port,
   return first_byte >= kFirstMulticastByte && first_byte <= kLastMulticastByte;
 }
 
-// Shared by both sockets' open() and destructor.
-
 inline void close_socket(int& socket_fd) {
   if (socket_fd >= 0) ::close(socket_fd);
   socket_fd = -1;
 }
 
-// Prints the failed step with errno's text, closes the socket and returns false, so open() can
-// end with `return close_after_setup_error(socket_fd, "bind");`.
+// Prints the failed step with errno's text, closes the socket and returns false: what open()
+// returns on any failure.
 inline bool close_after_setup_error(int& socket_fd, const char* step) {
   std::perror(step);
   close_socket(socket_fd);
@@ -102,8 +99,14 @@ class MulticastReceiver {
   int socket_fd = -1;
 
  public:
-  // About 10,500 full packets, about half a second at 20,000 packets/s.
+  // Holds 8,192 full packets, about 0.4 s at 20,000 packets/s: macOS charges each queued datagram
+  // the size of its kernel buffer, 512 B for a full 396 B packet (measured on the M1).
   static constexpr int kReceiveBufferBytes = 4 * 1024 * 1024;
+
+  // Room for any UDP datagram (over IPv4 one carries at most 65,507 B), so recv never cuts one
+  // short and the decoder judges every datagram whole: a cut one could decode as a valid
+  // shorter packet.
+  using DatagramBuffer = std::array<std::uint8_t, 64 * 1024>;
 
   MulticastReceiver() = default;
   MulticastReceiver(const MulticastReceiver&) = delete;
@@ -147,10 +150,8 @@ class MulticastReceiver {
   // queued or the call failed.
   // - A socket error counts as "nothing queued": the caller polls again, and a lost packet is
   //   caught later as a sequence gap.
-  // - A datagram longer than capacity is cut to capacity, so pass one byte more than the largest
-  //   packet: an oversized datagram then still fails to decode.
-  std::size_t try_receive(std::uint8_t* out, std::size_t capacity) {
-    const ssize_t received = ::recv(socket_fd, out, capacity, MSG_DONTWAIT);
+  std::size_t try_receive(DatagramBuffer& out) {
+    const ssize_t received = ::recv(socket_fd, out.data(), out.size(), MSG_DONTWAIT);
     if (received <= 0) return 0;
     return static_cast<std::size_t>(received);
   }

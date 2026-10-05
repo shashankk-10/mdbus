@@ -3,8 +3,6 @@
 // A bus's name rules and the two paths derived from its name.
 // - A bus is found by name: the writer and every reader turn "demo" into the same shm name
 //   (the segment) and the same lock-file path (the writer lock) with make_bus_paths().
-// - Used by BusWriter, BusReader and WriterHealthMonitor; mdbus_watch --destroy calls
-//   destroy_bus().
 
 #include <sys/mman.h>
 #include <unistd.h>

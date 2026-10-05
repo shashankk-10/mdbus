@@ -3,8 +3,9 @@
 // A small test harness. TEST cases register themselves; CHECK records a failure and goes on,
 // REQUIRE leaves the case. CHILD_PROCESS entry points let a test re-run its own binary as another
 // process (spawn_self), which is how cross-process cases get real processes to kill and stop.
-// Each test file's main() calls run_main(): it runs the named child, or the tests.
+// The shared main() in test_main.cpp calls run_main().
 
+#include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -68,14 +69,21 @@ inline void fail(const char* file, int line, const char* what) {
   std::fprintf(stderr, "  FAIL %s:%d: %s\n", file, line, what);
 }
 
-// Starts the program args[0] with the arguments that follow it. -1 if it could not start.
-inline pid_t spawn_program(std::vector<std::string> args) {
+// Starts the program args[0] with the arguments that follow it, and its stdout into the file
+// stdout_path if one is named. -1 if it could not start.
+inline pid_t spawn_program(std::vector<std::string> args, const std::string& stdout_path = "") {
   std::vector<char*> argv;
   for (std::string& arg : args) argv.push_back(arg.data());
   argv.push_back(nullptr);
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  if (!stdout_path.empty())
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, stdout_path.c_str(),
+                                     O_WRONLY | O_CREAT | O_TRUNC, 0600);
   pid_t pid = -1;
-  if (posix_spawn(&pid, argv[0], nullptr, nullptr, argv.data(), environ) != 0) return -1;
-  return pid;
+  const int failed = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  return failed == 0 ? pid : -1;
 }
 
 // Starts this test binary again (argv[0] as ctest ran it) as the CHILD_PROCESS child_name, with
@@ -85,8 +93,11 @@ inline pid_t spawn_self(const char* child_name, std::vector<std::string> args = 
   return spawn_program(std::move(args));
 }
 
+// A child killed by signal N reports exit code kExitCodeSignalBase + N, as a shell does.
+constexpr int kExitCodeSignalBase = 128;
+
 // Kills a spawned child on every exit path, so a failed REQUIRE never leaves a stopped process
-// holding a lock. wait_for_exit_code() returns the exit status, or 128 + signal if it was killed.
+// holding a lock.
 struct ChildProcess {
   pid_t pid;
 
@@ -110,7 +121,7 @@ struct ChildProcess {
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     pid = -1;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    if (WIFSIGNALED(status)) return kExitCodeSignalBase + WTERMSIG(status);
     return -1;
   }
 };
@@ -124,16 +135,6 @@ inline std::string make_test_bus_name(const std::string& tag) {
 
 inline void sleep_ms(unsigned ms) {
   usleep(static_cast<useconds_t>(ms * mdbus::kMicrosecondsPerMillisecond));
-}
-
-// Polls condition every ms until it holds or timeout_ms passes.
-template <class Condition>
-bool wait_until(Condition&& condition, unsigned timeout_ms = 5000) {
-  for (unsigned t = 0; t < timeout_ms; ++t) {
-    if (condition()) return true;
-    sleep_ms(1);
-  }
-  return condition();
 }
 
 // Runs the CHILD_PROCESS child_name with the arguments after it; 1 if there is none.

@@ -5,6 +5,8 @@
 // - Order table: churns near its load cap over a small id space (duplicates, long probe
 //   clusters), must agree with an unordered_map, refuse inserts past 3/4 load, and keep every
 //   entry reachable after deletes.
+// - Ladder at the ends of int32: every offset far outside the window is refused (and, under
+//   UBSan, without overflow).
 // - A failure means the book can lose or misplace a level or an order.
 
 #include <algorithm>
@@ -45,6 +47,8 @@ constexpr std::int32_t kMaxMidPriceJump = 200;
 
 template <bool kIsBid>
 void ladder_vs_model(std::uint64_t seed) {
+  // One tick past the window's best edge: next_worse_level from here finds the best level.
+  constexpr std::int32_t kPastBestEdge = kIsBid ? kMaxPriceOffset + 1 : kMinPriceOffset - 1;
   PriceLadderSide<kIsBid> ladder;
   std::map<std::int32_t, std::uint32_t> model;
   TestRandom r(seed);
@@ -91,16 +95,16 @@ void ladder_vs_model(std::uint64_t seed) {
 
     std::int32_t want_best = kNoLevel;
     if (!model.empty()) want_best = kIsBid ? model.rbegin()->first : model.begin()->first;
-    if (ladder.best_offset() != want_best) ++bad;
+    std::uint32_t q = 0;
+    if (ladder.next_worse_level(kPastBestEdge, q) != want_best) ++bad;
     if (step % 256 != 0 || model.empty()) continue;
 
-    // The whole side, walked by next_worse_level from just past the best, equals the model: every
-    // level and quantity, in order. The model's levels best first: the highest price first for
-    // bids, the lowest for asks.
+    // The whole side, walked by next_worse_level from past the best edge, equals the model:
+    // every level and quantity, in order. The model's levels best first: the highest price first
+    // for bids, the lowest for asks.
     std::vector<std::pair<std::int32_t, std::uint32_t>> expected(model.begin(), model.end());
     if (kIsBid) std::reverse(expected.begin(), expected.end());
-    std::int32_t price = ladder.best_offset() + (kIsBid ? 1 : -1);
-    std::uint32_t q = 0;
+    std::int32_t price = kPastBestEdge;
     for (const std::pair<std::int32_t, std::uint32_t>& level : expected) {
       price = ladder.next_worse_level(price, q);
       if (price != level.first || q != level.second) ++bad;
@@ -165,6 +169,23 @@ TEST(order_table_matches_model) {
   }
 }
 
-int main(int argc, char** argv) {
-  return mdbus_test::run_main(argc, argv);
+// add_qty's own window check, used standalone at the ends of int32: every offset outside the
+// window is refused with 0 and leaves the side empty. The target traps on signed overflow, so
+// this also shows the check does not overflow (offset - kMinPriceOffset once did, from
+// INT32_MAX - 2047 up).
+TEST(ladder_refuses_offsets_far_outside_the_window) {
+  PriceLadderSide<true> bids;
+  PriceLadderSide<false> asks;
+  for (const std::int32_t offset :
+       {INT32_MIN, kMinPriceOffset - 1, kMaxPriceOffset + 1, INT32_MAX - 2047, INT32_MAX}) {
+    CHECK(bids.add_qty(offset, 1) == 0);
+    CHECK(asks.add_qty(offset, 1) == 0);
+  }
+  std::uint32_t q = 0;
+  CHECK(bids.next_worse_level(kMaxPriceOffset + 1, q) == kNoLevel);
+  CHECK(asks.next_worse_level(kMinPriceOffset - 1, q) == kNoLevel);
+
+  // Both edges are inside.
+  CHECK(bids.add_qty(kMinPriceOffset, 5) == 5 && bids.add_qty(kMaxPriceOffset, 7) == 7);
+  CHECK(bids.next_worse_level(kMaxPriceOffset, q) == kMinPriceOffset && q == 5);
 }

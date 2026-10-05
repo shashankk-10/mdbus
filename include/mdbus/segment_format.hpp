@@ -1,28 +1,59 @@
 #pragma once
 
-// Where each part of a bus sits inside its shared-memory segment: sizes, offsets, typed pointers,
-// build and validate.
-// - Segment map with the default layout:
+// A bus's shared-memory format: its compile-time shape (BusLayout), where each part sits inside
+// the segment (sizes, offsets, typed pointers), and how a segment is built and validated.
+// - segment: the one shm object of a bus. With the default layout:
 //   [ControlBlock 384 B][16384 slots x 128 B = 2 MB][instrument_count x 128 B records],
-//   rounded up to 16 KB pages.
-// - BusWriter calls segment_bytes() and construct() on a new segment; BusReader calls validate()
-//   and pointers_into() on a mapped one.
-// - Only the writer writes the segment; readers map it read-only.
+//   rounded up to 16 KB pages. Only the writer writes it; readers map it read-only.
+// - ready marker: Identity::ready_marker, which the writer sets to kSegmentReadyMarker last,
+//   with release, once the segment is complete, so a reader that loads it with acquire sees the
+//   whole segment.
+// - layout check: the writer stores kLayoutVersion and the ring's geometry (slot count, slot
+//   bytes, payload words) in the ControlBlock; a reader built with any other value refuses to
+//   attach (Status::LayoutMismatch) instead of misreading memory. Everything else that lives in
+//   shared memory is covered by bumping kLayoutVersion (constants.hpp).
+// - Every bus template takes a Layout and reads its sizes from it.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <new>
 
-#include "mdbus/bus_layout.hpp"
 #include "mdbus/constants.hpp"
+#include "mdbus/control_block.hpp"
+#include "mdbus/messages.hpp"
+#include "mdbus/ring_slot.hpp"
+#include "mdbus/snapshot_table.hpp"
 #include "mdbus/status.hpp"
 
 namespace mdbus {
 
+// Everything a reader and the writer must agree on at compile time: the messages, the ring's
+// slot count, payload words per slot and slot size.
+// - The bus uses the defaults. Tests use small slot counts; PayloadWordCount and SlotBytes exist
+//   for the Copy15 and Pad64 variants (baseline/bus_variants.hpp).
+// - Every shape rule is checked here, the one place a user picks the numbers.
+template <class MessageSchema = DefaultSchema, std::size_t SlotCount = kDefaultSlotCount,
+          std::size_t PayloadWordCount = kDefaultPayloadWords,
+          std::size_t SlotBytes = kCacheLineBytes>
+struct BusLayout {
+  using Schema = MessageSchema;
+  static constexpr std::size_t kSlotCount = SlotCount;
+  static constexpr std::size_t kPayloadWords = PayloadWordCount;
+  static constexpr std::size_t kSlotBytes = SlotBytes;
+  // One slot's payload as the writer and readers copy it.
+  using PayloadWords = std::array<std::uint64_t, PayloadWordCount>;
+
+  static_assert((SlotCount & (SlotCount - 1)) == 0 && SlotCount >= 2,
+                "slot count must be a power of two (slot index = seq & (count - 1))");
+  static_assert(MessageSchema::kMaxMessageBytes <= Payload<PayloadWordCount>::kMaxBodyBytes,
+                "the largest message must fit in a payload's body");
+  static_assert((PayloadWordCount + 1) * kWordBytes <= SlotBytes,
+                "stamp and payload must fit the slot");
+};
+
 // `value` rounded up to the next multiple of `multiple` (any positive number, not only powers of
 // two).
-// Example: round_up_to_multiple(2'228'608, 16384) == 2'244'608 (137 pages),
-//   round_up_to_multiple(16384, 16384) == 16384.
 constexpr std::size_t round_up_to_multiple(std::size_t value, std::size_t multiple) {
   return (value + multiple - 1) / multiple * multiple;
 }
@@ -37,8 +68,7 @@ struct SegmentPointers {
   std::uint32_t instrument_count = 0;  // records in the snapshot table
 };
 
-// The segment of one bus: ControlBlock, the ring, then one snapshot record per instrument, in
-// whole pages.
+// Where each part of a segment sits, and how a segment is built and checked.
 template <class Layout>
 struct SegmentFormat {
   using RingSlot = Slot<StdAtomics, Layout::kPayloadWords, Layout::kSlotBytes>;
@@ -59,8 +89,6 @@ struct SegmentFormat {
 
   // Typed pointers into a segment whose objects the writer's construct() already built; readers
   // map the segment and call this.
-  // Example (default layout, segment mapped at address A):
-  //   control = A, slots = A + 384, snapshot_records = A + 2,097,536
   static SegmentPointers<Layout> pointers_into(void* segment_start,
                                                std::uint32_t instrument_count) {
     char* first_byte = static_cast<char*>(segment_start);
@@ -76,8 +104,6 @@ struct SegmentFormat {
   // Builds a bus in a new zero-filled segment; writer only.
   // - Placement new starts the lifetime of every std::atomic word in the segment. Readers never
   //   construct anything: they map the segment and cast (pointers_into).
-  // - The ready marker is stored last, with release: a reader that sees it sees the whole
-  //   Identity and every constructed object.
   static SegmentPointers<Layout> construct(void* segment_start, std::uint32_t instrument_count) {
     // 1. Construct the control block, every slot and every snapshot record in place.
     char* first_byte = static_cast<char*>(segment_start);
@@ -91,7 +117,10 @@ struct SegmentFormat {
     // 2. Fill Identity, ready marker last.
     const SegmentPointers<Layout> result = pointers_into(segment_start, instrument_count);
     auto& identity = result.control->identity;
-    StdAtomics::store_relaxed(identity.layout_hash, Layout::layout_hash());
+    StdAtomics::store_relaxed(identity.layout_version, kLayoutVersion);
+    StdAtomics::store_relaxed(identity.slot_count, Layout::kSlotCount);
+    StdAtomics::store_relaxed(identity.slot_bytes, Layout::kSlotBytes);
+    StdAtomics::store_relaxed(identity.payload_words, Layout::kPayloadWords);
     StdAtomics::store_relaxed(identity.instrument_count, instrument_count);
     StdAtomics::store_release(identity.ready_marker, kSegmentReadyMarker);
     return result;
@@ -100,14 +129,18 @@ struct SegmentFormat {
   // Checks a mapped segment against what this binary was compiled for, in this order:
   // - ready marker 0 -> NotReady (the writer is still building it); any other wrong value ->
   //   NotABusSegment.
-  // - layout hash differs -> LayoutMismatch.
+  // - layout version, slot count, slot bytes or payload words differ -> LayoutMismatch.
   // - instrument count 0 or over kMaxInstrumentCount, or a mapping smaller than segment_bytes()
   //   of that count -> SizeMismatch.
   static Status validate(const ControlBlock<StdAtomics>& control, std::size_t mapped_bytes) {
     const std::uint64_t ready_marker = StdAtomics::load_acquire(control.identity.ready_marker);
     if (ready_marker == 0) return Status::NotReady;
     if (ready_marker != kSegmentReadyMarker) return Status::NotABusSegment;
-    if (StdAtomics::load_relaxed(control.identity.layout_hash) != Layout::layout_hash())
+    const auto& identity = control.identity;
+    if (StdAtomics::load_relaxed(identity.layout_version) != kLayoutVersion ||
+        StdAtomics::load_relaxed(identity.slot_count) != Layout::kSlotCount ||
+        StdAtomics::load_relaxed(identity.slot_bytes) != Layout::kSlotBytes ||
+        StdAtomics::load_relaxed(identity.payload_words) != Layout::kPayloadWords)
       return Status::LayoutMismatch;
     const std::uint64_t instrument_count =
         StdAtomics::load_relaxed(control.identity.instrument_count);

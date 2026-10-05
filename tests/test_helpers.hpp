@@ -1,7 +1,8 @@
 #pragma once
 
 // Test data and fixtures shared by several test files.
-// - InProcessBus: a real bus segment in anonymous shared memory, no file names and no lock.
+// - InProcessBus: a real bus segment in anonymous shared memory.
+// - WriteDuringCopy: an atomics policy that runs a store between a reader's copy and re-check.
 // - Pattern payloads: every word is derived from one version, so a copy that mixes two writes, or
 //   is older than expected, fails is_untorn_pattern() or the version check.
 // - make_test_snapshot(), top_levels_from_snapshot(), apply_delta(): the one test snapshot shape,
@@ -11,9 +12,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <utility>
 
 #include "mdbus/book/top_levels.hpp"
-#include "mdbus/bus_layout.hpp"
 #include "mdbus/constants.hpp"
 #include "mdbus/segment_format.hpp"
 #include "mdbus/shared_memory.hpp"
@@ -40,6 +42,18 @@ class InProcessBus {
   }
 };
 
+// StdAtomics, except that fence_acquire() first runs a one-shot hook. try_poll and
+// SnapshotTable::read call it exactly between their copy and their re-check, so the hook plays a
+// writer storing during the copy, on one thread and with no race.
+struct WriteDuringCopy : StdAtomics {
+  static inline std::function<void()> hook;
+
+  static void fence_acquire() {
+    if (hook) std::exchange(hook, nullptr)();
+    StdAtomics::fence_acquire();
+  }
+};
+
 // Word i of a pattern with i > 0 is version * kPatternVersionStride + i, and word 0 is the
 // version itself (the seq of a slot, the last_included_seq of a snapshot). A payload has far
 // fewer than 1000 words, so no two versions share any word.
@@ -60,7 +74,7 @@ bool is_untorn_pattern(const std::array<std::uint64_t, N>& words) {
   return words == pattern_words<N>(words[0]);
 }
 
-// pattern_words() laid over a whole snapshot record.
+// pattern_words() laid over a whole InstrumentSnapshot.
 inline InstrumentSnapshot pattern_snapshot(std::uint64_t version) {
   const std::array<std::uint64_t, kSnapshotWords> words = pattern_words<kSnapshotWords>(version);
   InstrumentSnapshot snapshot;
@@ -74,15 +88,21 @@ inline bool is_untorn_snapshot(const InstrumentSnapshot& snapshot) {
   return is_untorn_pattern(words);
 }
 
-// The snapshot a test writer publishes with seq for instrument_id: one bid at price seq, qty
-// instrument_id + 1.
+// The snapshot a test writer publishes with seq for instrument_id: one bid at price seq and one
+// ask at price seq + 1, each with qty instrument_id + 1.
+// - The bid is snapshot word 3, in the record's first 64 B half; the ask is word 9, in the
+//   second. So every 64 B half changes with seq, and a record written only halfway matches no
+//   make_test_snapshot (failure_test's torn-snapshot break relies on this).
 inline InstrumentSnapshot make_test_snapshot(std::uint16_t instrument_id, std::uint64_t seq) {
   InstrumentSnapshot snapshot{};
   snapshot.last_included_seq = seq;
   snapshot.instrument_id = instrument_id;
   snapshot.bid_count = 1;
+  snapshot.ask_count = 1;
   snapshot.bids[0].price = static_cast<std::int32_t>(seq);
   snapshot.bids[0].qty = instrument_id + 1u;
+  snapshot.asks[0].price = static_cast<std::int32_t>(seq + 1);
+  snapshot.asks[0].qty = instrument_id + 1u;
   return snapshot;
 }
 

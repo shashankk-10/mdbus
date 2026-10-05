@@ -1,11 +1,11 @@
 #pragma once
 
 // Compile-time constants of the bus, in two groups:
-// - Shared-memory shape: fed into BusLayout::layout_hash(), so a reader built with different
-//   values refuses to attach (Status::LayoutMismatch).
-// - Defaults and timings: NOT in the hash. A writer and a reader built with different values
-//   still attach; keep them equal by building both from one tree.
-// - Also holds the arm64-only guard. clock.hpp includes this file for the guard alone.
+// - Shared-memory shape: the writer stores the layout version and the ring's geometry in the
+//   segment header, so a reader built with different values refuses to attach
+//   (Status::LayoutMismatch, segment_format.hpp).
+// - Defaults and timings: not checked. A writer and a reader built with different values still
+//   attach; keep them equal by building both from one tree.
 
 #include <cstddef>
 #include <cstdint>
@@ -17,7 +17,7 @@
 
 namespace mdbus {
 
-// Shared-memory shape (fed into the layout hash).
+// Shared-memory shape (checked at attach).
 
 // 128 B: the cache-line size macOS reports on M1 (sysctl hw.cachelinesize).
 // - Every shared struct that a different core writes gets its own 128 B line, so two of them
@@ -29,8 +29,8 @@ constexpr std::size_t kCacheLineBytes = 128;
 // 64 B: the unit one core's L1 pulls in at a time.
 // - A slot keeps its stamp + 7 payload words inside one 64 B unit, so a reader moves one unit
 //   per message.
-// - measured: a payload spread over two units costs about 40% more per hop (DESIGN.md,
-//   Results: "Payload in one 64 B line vs two", the Copy15 variant).
+// - Measured: a payload spread over two units costs about 48% more per hop (DESIGN.md §8.3,
+//   "Payload in one 64 B line vs two", the Copy15 variant: 86.9 -> 128.9 ns).
 constexpr std::size_t kL1LineBytes = 64;
 
 constexpr std::size_t kWordBytes = sizeof(std::uint64_t);  // every shared field is one 8 B word
@@ -46,11 +46,12 @@ constexpr std::size_t kDefaultPayloadWords = 7;
 // plus the record's 8 B version = one 128 B snapshot record.
 constexpr std::size_t kTopLevelsPerSide = 6;
 
-// Bump by hand when a shared field moves or changes type without changing any struct size:
-// the layout hash only sees sizes, so it cannot notice that on its own.
-constexpr std::uint32_t kLayoutVersion = 5;
+// Bump by hand on any change to what lives in shared memory: a field added, moved or retyped, a
+// message added or changed, flag or enum values, the stamp or seqlock encoding. The header also
+// carries the ring's geometry, so a different slot count or slot size is caught without a bump.
+constexpr std::uint32_t kLayoutVersion = 6;
 
-// Defaults and timings (not in the layout hash).
+// Defaults and timings (not checked).
 
 constexpr std::size_t kPageSize = 16384;                 // Apple Silicon pages are 16 KB, not 4 KB
 constexpr std::uint32_t kDefaultInstrumentCount = 1024;  // snapshot table: 1024 x 128 B = 128 KB
@@ -59,9 +60,8 @@ constexpr std::uint32_t kDefaultInstrumentCount = 1024;  // snapshot table: 1024
 constexpr std::uint32_t kMaxInstrumentCount = 65536;
 
 // Writer cadence.
-// - The head hint (the next seq to publish, kept in the control block) is stored once per 64
-//   publishes: one extra store per 64, and a new or lapped reader starts at most 63 messages
-//   behind the true head.
+// - The head hint (ring.hpp) is stored once per 64 publishes: one extra store per 64, and a new
+//   or lapped reader starts at most 63 messages behind the true head.
 // - It is a cap: a tiny test ring uses half its slot count instead
 //   (RingWriter::kPublishesPerHeadHint).
 constexpr std::uint64_t kMaxPublishesPerHeadHint = 64;
@@ -72,21 +72,22 @@ constexpr std::uint64_t kPublishesPerHeartbeatCheck = 1024;
 constexpr std::size_t kMaxShmNameLength = 31;  // macOS limit (PSHMNAMLEN), counting the '/'
 
 // Liveness timing, all in steady_clock_ns() nanoseconds.
-constexpr std::uint64_t kHeartbeatPeriodNs = 1'000'000;     // writer refreshes at least every 1 ms
-constexpr std::uint64_t kHeartbeatTimeoutNs = 100'000'000;  // 100 ms quiet: a reader starts probing
-// A new writer keeps retrying the lock for 10 ms: a reader's probe holds a shared lock for a few
-// microseconds, so one failed attempt does not prove another writer exists.
-constexpr std::uint64_t kWriterLockTimeoutNs = 10'000'000;
-// A quiet reader probes the writer (state, heartbeat, then flock) and tries a re-attach at most
-// once per millisecond.
-constexpr std::uint64_t kWriterProbeIntervalNs = 1'000'000;
-// - Caveat: if steady_clock counts through system sleep, a reader can briefly see a sleeping
-//   writer as stalled (the flock is still held), never as down.
+constexpr std::uint64_t kHeartbeatPeriodNs = 1'000'000;     // at most one heartbeat store per 1 ms
+// 100 ms with no message and no fresh heartbeat: the reader reports the writer Down.
+constexpr std::uint64_t kHeartbeatTimeoutNs = 100'000'000;
 
-// A snapshot read tries once, then retries up to 256 times (one spin_pause before each), so it
-// gives up after 1 + 256 attempts, a few microseconds in all.
-// - A live writer finishes an update far sooner, so hitting the cap means the writer stopped
-//   mid-update; the cap exists so that cannot hang a reader. Not tuned.
+// A snapshot read tries once, then retries up to 256 times (one spin_pause before each): a time
+// budget, about 2.6 us for the 257 attempts (about 10 ns each, most of it the isb). Not tuned.
+// - A writer updating normally finishes far sooner, but one that is descheduled mid-update for
+//   longer makes readers give up while it is alive (SnapshotReadStatus::GaveUp).
 constexpr std::uint32_t kSnapshotReadMaxRetries = 256;
+
+// Hashing.
+
+// 2^64 / golden ratio (1.618...), a common choice for multiplicative hashing.
+// - Multiplying mixes each input bit into the bits above it, so the top bits of a product are
+//   the well-mixed ones.
+// - Odd, so the multiply never loses information.
+constexpr std::uint64_t kGoldenRatioMultiplier = 0x9E3779B97F4A7C15;
 
 }  // namespace mdbus

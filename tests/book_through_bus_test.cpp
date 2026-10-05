@@ -1,9 +1,11 @@
-// The top-K contract through the bus: FeedBook -> publish_book_output -> ring and snapshots -> a
-// consumer that applies deltas (absolute quantities) and recovery snapshots.
+// The top-K contract through the bus: what FeedBook outputs and publish_book_output publishes
+// must rebuild the writer's top levels in a Consumer that applies deltas and recovery snapshots.
 // - Phase 1, in lock step: after every event each consumer book equals the writer's top levels,
 //   no delta has more than 3 entries, and every side is sorted best first with positive qty.
 // - Phase 2: the consumer is lapped again and again, and lazy recovery must still land every
 //   book it touches on the writer's top levels.
+// - A refused replace: its status must reach a caught-up consumer before its delta, which is
+//   then dropped as stale.
 // - A failure means the published deltas and snapshots do not rebuild the writer's book.
 
 #include <cstring>
@@ -59,6 +61,22 @@ struct BookRebuildingConsumer : Consumer<BookRebuildingConsumer, SpinWait, TestL
   }
 };
 
+// One message the consumer handed to on().
+struct Delivery {
+  std::uint64_t seq;
+  std::uint8_t type_id;
+  std::uint64_t latency_start_ticks;
+};
+
+struct DeliveryRecordingConsumer : Consumer<DeliveryRecordingConsumer, SpinWait, TestLayout> {
+  std::vector<Delivery> deliveries;
+
+  template <class Message>
+  void on(const Message&, const MessageInfo& m) {
+    deliveries.push_back({m.seq, Message::kTypeId, m.header->latency_start_ticks});
+  }
+};
+
 }  // namespace
 
 // Both phases above. Would catch a delta that is relative instead of absolute, a missing
@@ -92,7 +110,7 @@ TEST(consumer_books_reproduce_the_image) {
           !is_sorted_best_first(feed_book.top_levels(o.instrument_id, 1), false))
         ++bad;
     }
-    if (o.has_anything_to_publish()) publish_book_output(publisher, feed_book, o, 0, 0);
+    publish_book_output(publisher, feed_book, o, 0, 0);
   };
 
   // Every instrument the reader holds (not stale) must equal the writer's top levels.
@@ -128,6 +146,60 @@ TEST(consumer_books_reproduce_the_image) {
         reader.stats().snapshot_recoveries > config.instrument_count);
 }
 
-int main(int argc, char** argv) {
-  return mdbus_test::run_main(argc, argv);
+// A Replace whose new leg is refused both changes the shown levels (the old order is gone) and
+// marks the instrument kInstrumentBad. A caught-up consumer must get the status first, go stale
+// and drop the delta: no on() may apply a delta from a book the writer knows is wrong. The
+// receive stamp stays on the event's first slot.
+TEST(refused_replace_delta_is_never_delivered) {
+  std::vector<InstrumentInfo> instrument_list(1);
+  instrument_list[0].reference_price = 10'000;
+  FeedBook<> feed_book(instrument_list, 10);
+  InProcessBus<TestLayout> bus(1);
+  Publisher<TestLayout> publisher(bus.pointers());
+  publisher.mark_running();
+  DeliveryRecordingConsumer reader;
+  reader.attach_in_process(bus.pointers());
+
+  // Bids 10005 (order 1) and 10004 (order 2); the reader recovers and is caught up.
+  OrderEvent add{};
+  add.type = EventType::Add;
+  add.side = Side::Bid;
+  add.qty = 100;
+  add.order_id = 1;
+  add.price = 10'005;
+  publish_book_output(publisher, feed_book, feed_book.apply(add), 0, 0);
+  add.order_id = 2;
+  add.price = 10'004;
+  publish_book_output(publisher, feed_book, feed_book.apply(add), 0, 0);
+  reader.poll_until_idle();
+  REQUIRE(!reader.is_stale(0));
+
+  // Order 1 replaced by order 3 at 15000, outside the price window: the new leg is refused.
+  OrderEvent replace{};
+  replace.type = EventType::Replace;
+  replace.order_id = 1;
+  replace.new_order_id = 3;
+  replace.price = 15'000;
+  replace.qty = 100;
+  const BookOutput output = feed_book.apply(replace);
+  REQUIRE(output.became_bad && output.delta.entry_count == 1);
+
+  const std::uint64_t first_seq = publisher.next_seq();
+  const std::size_t delivered_before = reader.deliveries.size();
+  constexpr std::uint64_t kReceiveTicks = 12'345;
+  CHECK(publish_book_output(publisher, feed_book, output, 0, kReceiveTicks) == 2);
+  reader.poll_until_idle();
+
+  // Delivered: the status alone, first and stamped. The delta was dropped as stale.
+  REQUIRE(reader.deliveries.size() == delivered_before + 1);
+  const Delivery& status = reader.deliveries.back();
+  CHECK(status.seq == first_seq && status.type_id == InstrumentStatus::kTypeId &&
+        status.latency_start_ticks == kReceiveTicks);
+  CHECK(reader.is_stale(0) && reader.stats().messages_dropped_while_stale == 1);
+
+  // The delta, read raw since no consumer delivers it, carries no stamp.
+  RingReader<StdAtomics, TestLayout> raw_reader(bus.pointers().slots, bus.pointers().control);
+  TestLayout::PayloadWords words{};
+  REQUIRE(raw_reader.try_poll(first_seq + 1, words) == TryPollResult::Ok);
+  CHECK(words[kLatencyStartTicksWord] == 0);
 }

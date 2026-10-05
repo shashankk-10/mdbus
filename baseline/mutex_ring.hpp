@@ -10,8 +10,14 @@
 
 // The ring behind the Mutex variant: the production slots under one pthread mutex.
 // - Used only by baseline/bus_variants.hpp (VariantBus<..., MutexProtocol>) inside bus_bench.
-// - Same slot layout and payload words as the stamp ring; only the synchronisation differs, so
-//   Mutex -> Base in the results measures the stamp protocol and nothing else.
+// - Same slot layout and payload words as the stamp ring, but Mutex -> Base measures more than
+//   the synchronisation. Every reader poll writes the lock, so readers are coupled to the
+//   writer. There is no snapshot table: Base's paced writer also writes a snapshot every 16
+//   messages and its slow reader reads one every 64, which Mutex skips (that favours Mutex).
+// - With the slow reader present (the e2e comparison), an E-core process at BACKGROUND QoS takes
+//   the ring's lock for every poll and copy. The writer waits whenever that reader holds it,
+//   longest when the reader is descheduled while holding it: about three in four of the writer's
+//   publishes ran late (writer_late: 76%, results/runs.csv).
 
 namespace mdbus::baseline {
 

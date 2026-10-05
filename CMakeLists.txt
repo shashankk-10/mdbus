@@ -95,11 +95,15 @@ target_include_directories(mdbus_test_support INTERFACE tests)
 target_link_libraries(mdbus_test_support INTERFACE mdbus_repo_headers)
 target_compile_options(mdbus_test_support INTERFACE -UNDEBUG)
 
-# add_mdbus_test(<name> [LABELS ...] [DEFINES ...] [ARGS ...] [TIMEOUT s]) builds
-# tests/<name>.cpp and registers it with ctest (default timeout 60 s).
+# add_mdbus_test(<name> [NO_MAIN] [LABELS ...] [DEFINES ...] [ARGS ...] [TIMEOUT s]) builds
+# tests/<name>.cpp with the shared tests/test_main.cpp (NO_MAIN: the test has its own main) and
+# registers it with ctest (default timeout 60 s).
 function(add_mdbus_test name)
-  cmake_parse_arguments(ARG "" "TIMEOUT" "LABELS;DEFINES;ARGS" ${ARGN})
+  cmake_parse_arguments(ARG "NO_MAIN" "TIMEOUT" "LABELS;DEFINES;ARGS" ${ARGN})
   add_executable(${name} tests/${name}.cpp)
+  if(NOT ARG_NO_MAIN)
+    target_sources(${name} PRIVATE tests/test_main.cpp)
+  endif()
   target_link_libraries(${name} PRIVATE mdbus_test_support)
   target_compile_definitions(${name} PRIVATE ${ARG_DEFINES})
   if(NOT ARG_TIMEOUT)
@@ -112,19 +116,45 @@ endfunction()
 foreach(test_name messages ring snapshot consumer no_alloc udp_feed)
   add_mdbus_test(${test_name}_test LABELS unit)
 endforeach()
+# Compile-fail: a BookDelta published without its snapshot must not compile. Each test compiles
+# one such call and passes only on Publisher's static_assert message.
+set(refused_publish ${CMAKE_CXX_COMPILER} -std=c++20 -fsyntax-only -I${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/tests/publish_refuses_book_delta.cpp)
+add_test(NAME publish_refuses_book_delta COMMAND ${refused_publish})
+add_test(NAME publish_with_latency_start_refuses_book_delta
+  COMMAND ${refused_publish} -DMDBUS_WITH_LATENCY_START)
+set_tests_properties(publish_refuses_book_delta publish_with_latency_start_refuses_book_delta
+  PROPERTIES LABELS unit
+  PASS_REGULAR_EXPRESSION "a BookDelta must go through publish_and_update_snapshot")
 foreach(test_name book_vs_naive ladder_and_table book_through_bus)
   add_mdbus_test(${test_name}_test LABELS book TIMEOUT 300)
 endforeach()
-# The real simulator and feed handler processes, with the consumer in the test process.
+# Signed overflow traps in ladder_and_table_test in every build, not only under UBSan, so its
+# window test fails on an index that overflows even where the wrapped value happens to work.
+target_compile_options(ladder_and_table_test PRIVATE -fsanitize=signed-integer-overflow
+  -fsanitize-trap=signed-integer-overflow)
+# The real simulator, feed handler and viewer processes, with the consumer in the test process.
 add_mdbus_test(end_to_end_test LABELS e2e TIMEOUT 120
            DEFINES MDBUS_FEED_HANDLER_PATH="$<TARGET_FILE:mdbus_feed_handler>"
-                   MDBUS_EXCHANGE_SIM_PATH="$<TARGET_FILE:mdbus_exchange_sim>")
-add_dependencies(end_to_end_test mdbus_feed_handler mdbus_exchange_sim)
+                   MDBUS_EXCHANGE_SIM_PATH="$<TARGET_FILE:mdbus_exchange_sim>"
+                   MDBUS_WATCH_PATH="$<TARGET_FILE:mdbus_watch>")
+add_dependencies(end_to_end_test mdbus_feed_handler mdbus_exchange_sim mdbus_watch)
 set_tests_properties(end_to_end_test PROPERTIES PROCESSORS 3)  # the feed and the reader spin
 add_mdbus_test(failure_test LABELS failure TIMEOUT 180)
-# 300 ms per reader placement: at 100 ms the writer-side mutants now and then survive the
-# P-core placement.
-add_mdbus_test(mutant_stress LABELS stress ARGS 300 TIMEOUT 180)
+# 300 ms per cell, 4 cells per round: about 8 s. A mutant that survives a round is run again, up
+# to twice at 600 ms, before it fails the test.
+add_mdbus_test(mutant_stress NO_MAIN LABELS stress ARGS 300 TIMEOUT 180)
+# The exit rule itself: with a mutant that nothing can kill, mutant_stress must exit 1. Passes
+# only on that exit after a clean control and at least one kill, where an any-kill rule would
+# exit 0; a crash or an inconclusive control fails it. Not under TSan, which runs the control
+# alone. The two never run at once: each spins four threads.
+if(NOT MDBUS_SANITIZE STREQUAL "thread")
+  add_test(NAME mutant_stress_refuses_a_survivor COMMAND mutant_stress 100 --with-equivalent-mutant)
+  set_tests_properties(mutant_stress_refuses_a_survivor PROPERTIES LABELS stress
+    PASS_REGULAR_EXPRESSION "Control clean, [1-5] of 6 mutants killed: exit 1\\.")
+  set_tests_properties(mutant_stress mutant_stress_refuses_a_survivor
+    PROPERTIES RESOURCE_LOCK stress_threads)
+endif()
 
 # Smoke: every benchmark briefly, one at a time (a bus run spins up to three P-cores).
 # - A run that measured nothing exits non-zero. Failed gates do not fail a smoke run.
@@ -155,10 +185,11 @@ add_test(NAME smoke_Base_fanout  # slow reader on the hot ring (reads snapshots)
   COMMAND mdbus_bench_Base ${smoke} --slow read --out smoke/fanout)
 add_test(NAME smoke_Mutex_fanout  # slow reader on the hot ring, mutex ring
   COMMAND mdbus_bench_Mutex ${smoke} --slow read --out smoke/mutex_fanout)
-add_test(NAME smoke_Base_relay  # slow reader behind a relay
-  COMMAND mdbus_bench_Base ${smoke} --slow read --relay 1 --out smoke/relay)
-add_test(NAME smoke_Base_burn  # the slow reader's E-core work with no ring mapped
-  COMMAND mdbus_bench_Base ${smoke} --slow burn --out smoke/burn)
 get_property(all_tests DIRECTORY PROPERTY TESTS)
 list(FILTER all_tests INCLUDE REGEX "^smoke_")
 set_tests_properties(${all_tests} PROPERTIES LABELS "bench;smoke" TIMEOUT 120 RUN_SERIAL TRUE)
+# The benchmark tooling (compare.py, report.py, the bench command lines and launcher), against the
+# benchmarks above. Its compare.py cases need PyYAML, and are skipped without it.
+add_test(NAME bench_tools_test
+  COMMAND python3 ${PROJECT_SOURCE_DIR}/bench/bench_tools_test.py ${CMAKE_BINARY_DIR}/bench)
+set_tests_properties(bench_tools_test PROPERTIES LABELS bench TIMEOUT 120 RUN_SERIAL TRUE)

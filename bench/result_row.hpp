@@ -6,7 +6,6 @@
 //   failed, so a run with a failed gate is written but not counted.
 // - format_ticks() and print_conditions_line(): the few summary lines for the person at the
 //   terminal.
-// - Used by bus_bench, dispatch_bench and feed_bench.
 
 #include <errno.h>
 #include <sys/stat.h>
@@ -51,10 +50,14 @@ inline void add_failed_gate(std::string& failed_gates, bool passed, const std::s
   failed_gates += gate_name;
 }
 
-// The two gates every P-core role must pass: it ran on the P-cores, at full clock.
-inline void add_cpu_gates(std::string& failed_gates, const ProcessCounters& counters) {
-  add_failed_gate(failed_gates, counters.p_core_share() >= kMinPCoreShare, "pshare");
-  add_failed_gate(failed_gates, counters.effective_ghz() >= kMinPCoreGhz, "ghz");
+// The two gates every P-core role must pass: it ran on the P-cores, at full clock. Their names
+// are pshare and ghz, plus name_suffix ("_writer" gives pshare_writer).
+inline void add_cpu_gates(std::string& failed_gates, const ProcessCounters& counters,
+                          const char* name_suffix = "") {
+  add_failed_gate(failed_gates, counters.p_core_share() >= kMinPCoreShare,
+                  std::string("pshare") + name_suffix);
+  add_failed_gate(failed_gates, counters.effective_ghz() >= kMinPCoreGhz,
+                  std::string("ghz") + name_suffix);
 }
 
 // One CSV row per run: a header line and a value line, columns in the order first set.
@@ -147,7 +150,6 @@ inline bool finish_row(ResultRow& row, const std::string& failed_gates, const st
 constexpr double kTicksShownAsInterval = 3;
 // At or above 10 us a reading is shown in us instead of ns.
 constexpr double kNsShownAsMicroseconds = 1e4;
-constexpr double kNsPerMicrosecond = 1e3;
 
 // A latency in ticks as text for the terminal, the same way scripts/report.py shows it.
 // - Below 3 ticks a reading of n ticks only bounds the true value to (n - 1, n + 1) ticks, so it
@@ -162,7 +164,7 @@ inline std::string format_ticks(double ticks) {
   } else if (ns < kNsShownAsMicroseconds) {
     std::snprintf(text, sizeof text, "%.0f ns", ns);
   } else {
-    std::snprintf(text, sizeof text, "%.1f us", ns / kNsPerMicrosecond);
+    std::snprintf(text, sizeof text, "%.1f us", ns / static_cast<double>(kNsPerMicrosecond));
   }
   return text;
 }

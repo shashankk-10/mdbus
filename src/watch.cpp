@@ -1,16 +1,19 @@
 // mdbus_watch: the live viewer of a named bus, and the smallest complete Consumer.
-// - Once a second it prints messages read, book deltas and trades, laps, the writer's health
-//   and one instrument's best bid and ask, read from the snapshot table.
-// - Sits at the end of the data flow, beside the real readers: feed handler -> ring -> here.
-// - If the feed handler restarts, Consumer re-attaches to the new bus by itself. Ctrl-C ends
-//   the process; --destroy removes a bus instead of watching it.
+// - Once a second it prints that second's messages, book deltas and trades, the running totals
+//   of status messages and laps, the writer's health and one instrument's best bid and ask,
+//   read from the snapshot table.
+// - If the feed handler restarts, it makes a fresh segment; once the old writer reads Down, the
+//   viewer attaches to the new one by name. Ctrl-C ends the process; --destroy removes a bus
+//   instead of watching it.
 
 #include <iomanip>
 #include <iostream>
 #include <string>
 
+#include "mdbus/bus_paths.hpp"
 #include "mdbus/consumer.hpp"
-#include "command_line.hpp"
+#include "mdbus/writer_liveness.hpp"
+#include "src/command_line.hpp"
 
 using namespace mdbus;
 
@@ -62,7 +65,8 @@ void print_help() {
       << "options:\n"
       << "  --inst N           the instrument whose best bid and ask to show (default 0)\n"
       << "  --seconds N        stop after N seconds (default 0: until Ctrl-C)\n"
-      << "  --destroy          remove the bus (its segment and lock file) and exit\n"
+      << "  --destroy          remove the bus (its segment and lock file) and exit;\n"
+      << "                     refused while a writer holds the bus\n"
       << "\n"
       << "example:\n"
       << "  mdbus_watch --bus demo --inst 3\n";
@@ -90,15 +94,6 @@ struct CountingConsumer : Consumer<CountingConsumer, SleepWait> {
     ++statuses;
   }
 };
-
-const char* health_name(WriterHealth health) {
-  switch (health) {
-    case WriterHealth::Alive: return "alive";
-    case WriterHealth::Stalled: return "stalled";
-    case WriterHealth::Down: return "down";
-  }
-  return "unknown";
-}
 
 std::string best_level_text(const Level& level, unsigned levels_on_side) {
   if (levels_on_side == 0) return "-";
@@ -164,6 +159,7 @@ class BusWatcher {
     while (config.seconds == 0 || second <= config.seconds) {
       if (consumer.poll_once() == PollOnceResult::GotMessage) ++messages_read;
       if (steady_clock_ns() < next_report_ns) continue;
+      follow_restarted_writer();
       print_report_line(second);
       next_report_ns += kNsPerSecond;
       ++second;
@@ -171,12 +167,27 @@ class BusWatcher {
   }
 
  private:
+  // While the writer reads Down, looks for a live one under the bus name: a restarted feed
+  // handler's fresh segment. The dead writer's segment stays linked until then, and its old
+  // heartbeat keeps it from being attached again.
+  void follow_restarted_writer() {
+    if (consumer.writer_health() != WriterHealth::Down) return;
+    BusReader<> candidate;
+    if (candidate.open(config.bus_name) != Status::Ok) return;
+    const std::uint64_t now_ns = steady_clock_ns();
+    if (judge_writer(*candidate.pointers().control, now_ns, UINT64_MAX, kHeartbeatTimeoutNs) !=
+        WriterHealth::Alive)
+      return;
+    if (consumer.attach(config.bus_name) == Status::Ok)
+      std::cout << "attached to a new writer's segment" << std::endl;
+  }
+
   void print_report_line(std::uint64_t second) {
     std::cout << std::setw(3) << second << " s " << std::setw(8)
               << messages_read - reported_messages << " msg/s " << std::setw(7)
-              << consumer.deltas - reported_deltas << " deltas " << std::setw(6)
-              << consumer.trades - reported_trades << " trades  " << consumer.statuses
-              << " status msgs  laps " << consumer.stats().times_lapped << "  writer "
+              << consumer.deltas - reported_deltas << " deltas/s " << std::setw(6)
+              << consumer.trades - reported_trades << " trades/s  (total " << consumer.statuses
+              << " status msgs, " << consumer.stats().times_lapped << " laps)  writer "
               << health_name(consumer.writer_health()) << "  inst_id " << config.instrument_id
               << ": " << top_of_book_text(consumer, config.instrument_id) << std::endl;
     reported_messages = messages_read;
@@ -184,6 +195,24 @@ class BusWatcher {
     reported_trades = consumer.trades;
   }
 };
+
+// --destroy: removes the bus's segment and lock file while holding the writer lock, so a writer
+// that holds the bus, running or stopped, makes it refuse. A bus that does not exist is fine.
+int destroy_bus_without_writer(const std::string& bus_name) {
+  BusPaths paths;
+  WriterLock writer_lock;
+  Status status = Status::BadName;
+  if (make_bus_paths(bus_name, paths)) {
+    status = writer_lock.acquire(paths);
+  }
+  if (status != Status::Ok) {
+    std::cerr << "mdbus_watch: bus " << bus_name << ": status " << status_name(status)
+              << ", not removed" << std::endl;
+    return status == Status::BadName ? kExitBadCommandLine : kExitSetupFailed;
+  }
+  destroy_bus(bus_name);
+  return kExitOk;
+}
 
 }  // namespace
 
@@ -193,10 +222,7 @@ int main(int argc, char** argv) {
     print_help();
     return kExitBadCommandLine;
   }
-  if (config.destroy_requested) {
-    destroy_bus(config.bus_name);
-    return kExitOk;
-  }
+  if (config.destroy_requested) return destroy_bus_without_writer(config.bus_name);
 
   BusWatcher watcher(config);
   if (!watcher.open()) return kExitSetupFailed;

@@ -2,13 +2,13 @@
 
 // The atomic policy: the shared word type plus the six load/store/fence operations the ring
 // and snapshot protocols are written against.
-// - Why a policy and not std::atomic calls inline: tests/mutants.hpp swaps in policies that
-//   weaken exactly one operation (a release store made relaxed, a fence dropped), and
-//   mutant_stress must catch each one on the hardware. The protocol code is the same either way.
+// - Why a policy and not std::atomic calls inline: tests/mutants.hpp swaps in policies that each
+//   weaken one of these operations wherever it is used (every release store made relaxed, a
+//   fence dropped), and mutant_stress must catch each one on the hardware. ring_test and
+//   snapshot_test use the same seam to land a write in the middle of a copy. The protocol code
+//   is the same either way.
 // - StdAtomics is the only policy production code uses. Each operation's trailing comment
 //   names the arm64 instruction it compiles to with -mcpu=apple-m1.
-// - acquire / release: a release store makes every earlier write visible to whoever later
-//   reads that value with an acquire load.
 // - Readers map the segment read-only. Both loads are plain load instructions on arm64, never
 //   a compare-and-swap, so they work on that mapping.
 
@@ -50,8 +50,10 @@ struct StdAtomics {
     std::atomic_thread_fence(std::memory_order_acquire);
   }
 
-  // dmb ish, a full barrier. The ring only needs earlier stores ordered (dmb ishst), but I keep
-  // the C++ fence so the mutants exercise exactly the code that runs (DESIGN.md, Protocol).
+  // dmb ish, a full barrier: a C++ release fence must also order earlier loads, which dmb ishst
+  // does not. The ring only needs earlier stores ordered, but ishst would take inline asm outside
+  // the C++ memory model; the C++ fence keeps the mutants weakening exactly the code that runs.
+  // The cost difference was not measured.
   static void fence_release() {
     std::atomic_thread_fence(std::memory_order_release);
   }

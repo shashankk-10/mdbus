@@ -1,12 +1,13 @@
 #pragma once
 
 // Broken copies of the publication protocol, run by mutant_stress.cpp on real cores.
-// - Each ordering mutant is an atomic policy that weakens one operation. Its static member hides
-//   the base policy's, so the production ring and snapshot code runs unmodified on top of it.
+// - Each ordering mutant is an atomic policy that weakens one of its operations. Its static
+//   member hides the base policy's, so the production ring and snapshot code runs unmodified on
+//   top of it, and every call site of that operation is weakened at once.
 // - SkipRecheckReader is the one structural mutant: a reader with a missing step. It lives here
 //   so that no broken reader ever sits in include/.
-// - mutant_stress must report each of these as killed on some placement. One that survives
-//   means the stress test cannot see that kind of bug.
+// - mutant_stress fails unless each of these shows a bad copy in some cell (stress layout x
+//   reader placement). One that survives means the stress test cannot see that kind of bug.
 
 #include <cstddef>
 #include <cstdint>
@@ -37,21 +38,21 @@ struct NoAcquireFence : BaseAtomics {
 };
 
 // Writer side: every release store becomes relaxed.
-// - Mainly the done (even) stamp, which then no longer publishes the payload stored before it.
-// - Also weakens the head hint and heartbeat stores, and the snapshot's even version.
+// - The done (even) stamp then no longer publishes the payload stored before it.
+// - The head hint, the heartbeat and the snapshot's even version are weakened too.
 template <class BaseAtomics>
-struct RelaxedDoneStamp : BaseAtomics {
+struct ReleaseStoresRelaxed : BaseAtomics {
   static void store_release(typename BaseAtomics::Word& word, std::uint64_t value) {
     BaseAtomics::store_relaxed(word, value);
   }
 };
 
 // Reader side: every acquire load becomes relaxed.
-// - Mainly the first stamp load, so payload loads may be satisfied before it and a stale copy
-//   passes under a fresh stamp.
-// - Also weakens the head hint load and the snapshot version loads.
+// - Payload loads may then be satisfied before the first stamp load, so a stale copy passes
+//   under a fresh stamp.
+// - The head hint load and the snapshot version loads are weakened too.
 template <class BaseAtomics>
-struct RelaxedFirstStampLoad : BaseAtomics {
+struct AcquireLoadsRelaxed : BaseAtomics {
   static std::uint64_t load_acquire(const typename BaseAtomics::Word& word) {
     return BaseAtomics::load_relaxed(word);
   }

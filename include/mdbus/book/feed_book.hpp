@@ -1,20 +1,25 @@
 #pragma once
 
-// The feed handler's order book: exchange -> feed handler -> FeedBook -> Publisher -> ring.
-// - Input: one decoded OrderEvent at a time (order_event.hpp), from src/feed_handler.cpp.
-// - Output per event: a BookOutput with the change to the best 6 levels of one side as a
-//   BookDelta (absolute quantities, at most 3 entries), plus a Trade for an execution.
-//   publish_book_output.hpp puts it on the bus.
-// - An add is refused if it is malformed, outside the price window, past the order table's cap
-//   or a live duplicate. The instrument is then marked kInstrumentBad for the rest of the run.
-// - Four policies plug in through BookConfig: price levels, order index, instrument lookup and
-//   prefetch. The program always uses FinalBookConfig; the benchmarks swap one at a time.
+// FeedBook: the feed handler's order book, for every instrument, one OrderEvent at a time.
+// - Top levels (the shown levels): the best 6 price levels of a side (kTopLevelsPerSide), the
+//   only part of the book consumers see. Per event the book returns a BookOutput: their change
+//   on one side as a BookDelta (absolute quantities, at most 3 entries), plus a Trade for an
+//   execution. publish_book_output.hpp puts it on the bus.
+// - Price window: the 4096 prices, kMinPriceOffset..kMaxPriceOffset ticks from an instrument's
+//   reference_price, at which its orders may rest. The reference never moves.
+// - Price ladder (the trading term): the total qty at every price of the window, per side
+//   (price_ladder.hpp). Not the "book ladder" of F0..F4 benchmark configs (baseline/).
+// - An add is refused if it is malformed, outside the price window, past the order table's cap,
+//   a live duplicate, or would wrap its level's 32-bit total. The instrument is then marked
+//   kInstrumentBad for the rest of the run.
+// - Three policies (price levels, order index, instrument lookup) and a prefetch distance plug
+//   in through BookConfig, so the benchmarks can swap one at a time and the oracle test can
+//   check each against the naive book (F0). The program always uses FinalBookConfig.
 
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
-#include "mdbus/book/instrument_lookup.hpp"
 #include "mdbus/book/order_event.hpp"
 #include "mdbus/book/order_table.hpp"
 #include "mdbus/book/price_ladder.hpp"
@@ -26,35 +31,49 @@
 
 namespace mdbus::book {
 
-// Prefetch policy: in a batch, ask for the order-table entry of a later event early.
-struct PrefetchAhead {
-  // While applying event i, prefetch the order-table entry of event i+4.
-  // - measured: clearly less time per event with a 32 MB table, about no change when the table
-  //   fits in L2 (DESIGN.md, the F3 -> F4 row). 4 was picked, not swept.
-  static constexpr std::size_t kEventsAhead = 4;
+// Lookup policy: which instrument an event is for.
+// - Every event carries its dense instrument id, so the lookup is a bounds check.
+// - The naive design's symbol lookup (baseline/book_ladder.hpp, F0..F2) plugs in at the same place.
+// - Ids are 0..N-1 with no gaps, so an instrument's id is its array position.
+class InstrumentLookupById {
+ private:
+  std::size_t instrument_count;
+
+ public:
+  explicit InstrumentLookupById(const std::vector<InstrumentInfo>& instrument_list)
+      : instrument_count(instrument_list.size()) {}
+
+  // The event's instrument id, or kNoInstrument if it is out of range.
+  // - Takes the whole event, not the id, because the baseline symbol lookup needs the symbol.
+  std::uint16_t find_instrument(const OrderEvent& event) const {
+    if (event.instrument_id < instrument_count) return event.instrument_id;
+    return kNoInstrument;
+  }
 };
 
-// The book's policies, one per sub-problem.
-// - baseline/book_ladder.hpp builds F0..F4 from it, each step changing one policy:
-//     F0 -> F1  LevelPolicy:      std::map per side -> PriceLadder (flat array + bitmap)
-//     F1 -> F2  OrderIndexPolicy: std::unordered_map -> OrderTable (open addressing)
-//     F2 -> F3  LookupPolicy:     symbol string -> InstrumentLookupById (dense id)
-//     F3 -> F4  PrefetchPolicy:   NoPrefetch -> PrefetchAhead
-//     F4        this struct, the one the feed handler runs
+// The book's policies, one per sub-problem, and its prefetch distance: the config the feed
+// handler runs. baseline/book_ladder.hpp derives F0..F3 from it and tabulates the steps.
 struct FinalBookConfig {
   using LevelPolicy = PriceLadder;
   using OrderIndexPolicy = OrderTable;
   using LookupPolicy = InstrumentLookupById;
-  using PrefetchPolicy = PrefetchAhead;
+  // While applying event i of a batch, prefetch the order-table entry of event i + 4.
+  // - Measured: -37% per event at 1 M live orders, a table far bigger than L2 (2^21 entries x
+  //   24 B = 48 MiB; 100.0 -> 62.8 ns), and -3.0% at the default 16 K, inside L2 (6/6 pairs,
+  //   just under the 3% threshold: unresolved). 4 was picked, not swept.
+  // - The feed handler's batch is one packet, at most 10 events, so events 0..3 of each packet
+  //   are never prefetched (feed_bench's batches are 1365 events).
+  static constexpr std::size_t kPrefetchEventsAhead = 4;
 };
 
-// Why an add was refused. InstrumentStatus::reject_reason carries the value (0..4).
+// Why an add was refused. InstrumentStatus::reject_reason carries the value (0..5).
 enum class RejectReason : std::uint8_t {
   None,
   Malformed,
   PriceOutsideWindow,
   OrderTableFull,
-  Duplicate
+  Duplicate,
+  LevelTotalOverflow
 };
 
 // One event's result.
@@ -68,10 +87,6 @@ struct BookOutput {
   bool became_bad = false;
   RejectReason reject_reason = RejectReason::None;
   Trade trade{};
-
-  bool has_anything_to_publish() const {
-    return delta.entry_count != 0 || became_bad || trade.qty != 0;
-  }
 };
 static_assert(sizeof(BookOutput) == sizeof(BookDelta) + sizeof(std::uint16_t) + sizeof(bool) +
                                         sizeof(RejectReason) + sizeof(Trade),
@@ -86,15 +101,12 @@ struct BookCounters {
   std::uint64_t unknown_orders = 0;       // other events for an order the book does not have
 };
 
-// The feed handler's order book: one per process, all instruments.
-// - Single-threaded: only the feed thread calls it.
-// - BookConfig lets baseline/book_ladder.hpp swap one policy at a time (the F0..F4 table above),
-//   to measure each step and to check each against the old book.
+// One per process, single-threaded: only the feed thread calls it.
 // - Every structure is sized and touched in the constructor, so apply never allocates.
 template <class BookConfig = FinalBookConfig>
 class FeedBook {
  private:
-  static constexpr std::size_t kPrefetchEventsAhead = BookConfig::PrefetchPolicy::kEventsAhead;
+  static constexpr std::size_t kPrefetchEventsAhead = BookConfig::kPrefetchEventsAhead;
 
   // Everything an event reads per instrument besides the price ladder.
   // - Two 52 B TopLevels + 4 + 4 + 8 = 120 B, padded to two 64 B lines by alignas.
@@ -124,8 +136,7 @@ class FeedBook {
   BookCounters book_counters{};
 
  public:
-  // Startup only: sizes and touches every structure. The order table gets 2^order_table_log2
-  // entries.
+  // Startup only. The order table gets 2^order_table_log2 entries.
   FeedBook(const std::vector<InstrumentInfo>& instrument_list, unsigned order_table_log2)
       : instrument_states(checked_count(instrument_list)),
         price_levels(static_cast<std::uint32_t>(instrument_list.size())),
@@ -178,9 +189,8 @@ class FeedBook {
 
   // Applies events in order and calls handle_output(i, output) right after event i.
   // - The handler sees the book exactly as of event i, so it can fill a snapshot there.
-  // - Prefetches the order-table entry kEventsAhead events ahead (PrefetchPolicy).
-  // Example (3 events, kEventsAhead 4): no prefetch at all, since i + 4 >= 3; then
-  //   handle_output(0, ...), handle_output(1, ...), handle_output(2, ...).
+  // - Prefetches the order-table entry kPrefetchEventsAhead events ahead, within the batch: its
+  //   first kPrefetchEventsAhead events are never prefetched.
   template <class OutputHandler>
   void apply_batch(const OrderEvent* events, std::size_t event_count,
                    OutputHandler&& handle_output) {
@@ -192,8 +202,7 @@ class FeedBook {
     }
   }
 
-  // The current best 6 levels of both sides of instrument_id. The publisher sets
-  // last_included_seq.
+  // instrument_id's top levels, flags and time. The publisher sets last_included_seq.
   void fill_snapshot(std::uint16_t instrument_id, InstrumentSnapshot& snapshot) const {
     const InstrumentState& state = instrument_states[instrument_id];
     snapshot = InstrumentSnapshot{};
@@ -265,7 +274,22 @@ class FeedBook {
 
     // The price is inside the window (checked above), so the level always has a slot.
     const std::uint32_t total = price_levels.add_qty(instrument_id, side, price_offset, qty);
+    if (total < qty) {  // the level's total wrapped past 2^32 - 1
+      take_back_wrapped_add(state, id, record, output);
+      return;
+    }
     update_top_levels(instrument_id, side, price, total, change);
+  }
+
+  // Takes the add back out of the ladder and the order index, then refuses it: the level held
+  // more than 0 before, so it keeps that total and stays non-empty. Cold and out of line, so the
+  // add path does not carry it.
+  [[gnu::cold, gnu::noinline]] void take_back_wrapped_add(InstrumentState& state, std::uint64_t id,
+                                                          OrderRecord record, BookOutput& output) {
+    price_levels.remove_qty(record.instrument_id, record.side, record.price_offset,
+                            record.remaining_qty);
+    live_order_index.erase(live_order_index.find(id));
+    refuse_add(state, output, RejectReason::LevelTotalOverflow);
   }
 
   // Cancel, execute or replace: takes qty off the order and off its price level.
@@ -377,15 +401,15 @@ class FeedBook {
     if (change.has_before_copy)
       count = diff_top_levels(change.before, state.top_levels[change.side], changes);
 
-    // A replace changes at most the old level, the new level and the refill.
+    // At most 3 entries; diff_top_levels names the two cases, both from a replace.
     check_or_abort(count <= BookDelta::kMaxEntries, "a replace changes at most 3 levels");
 
     output.delta.side = count != 0 ? change.side : 0;
     output.delta.entry_count = static_cast<std::uint8_t>(count);
     for (std::size_t k = 0; k < count; ++k) output.delta.entries[k] = changes[k];
     if (count != 0) ++book_counters.top_level_changes;
-    // The snapshot's time is that of its last change: a trade outside the shown levels leaves
-    // it alone.
+    // The snapshot's time is that of the last change consumers see (a shown level, or the bad
+    // flag): a trade outside the shown levels leaves it alone.
     if (count != 0 || output.became_bad) state.exchange_time_ns = exchange_time_ns;
   }
 };

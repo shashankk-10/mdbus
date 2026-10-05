@@ -18,8 +18,7 @@
 
 namespace mdbus::book {
 
-// An order's remaining quantity and where it rests. The price is an offset from the
-// instrument's reference_price, which never moves.
+// An order's remaining quantity and where it rests (price_offset: ticks from reference_price).
 struct OrderRecord {
   std::uint32_t remaining_qty;
   std::uint16_t instrument_id;
@@ -42,7 +41,7 @@ constexpr std::uint32_t kMaxLoadNumerator = 3;
 constexpr std::uint32_t kMaxLoadDenominator = 4;
 
 // Live orders a table of 2^table_log2 entries may hold (2^4 entries -> 12).
-// - The old design's UnorderedMapIndex enforces the same cap, so both refuse the same add and
+// - The naive design's UnorderedMapIndex enforces the same cap, so both refuse the same add and
 //   the F0 oracle test stays in lock step.
 constexpr std::uint32_t max_live_orders_for(unsigned table_log2) {
   const std::uint32_t entry_count = std::uint32_t{1} << table_log2;
@@ -66,9 +65,8 @@ inline unsigned order_table_size_log2_for(std::uint64_t live_orders) {
   return table_log2;
 }
 
-// The order index: a fixed-size open-addressing hash table.
-// - The find / is_found / record interface is what lets the old design's UnorderedMapIndex
-//   (baseline/book_ladder.hpp) take its place in the F0..F1 benchmark steps.
+// The find / is_found / record interface is what lets the naive design's UnorderedMapIndex
+// (baseline/book_ladder.hpp) take its place in configs F0 and F1.
 class OrderTable {
  private:
   std::vector<OrderTableEntry> entries;
@@ -86,13 +84,6 @@ class OrderTable {
 
   static constexpr unsigned kMinTableSizeLog2 = 4;   // 16 entries, the smallest tests use
   static constexpr unsigned kMaxTableSizeLog2 = 30;  // 2^30 entries x 24 B = 24 GiB
-
-  // 2^64 / golden ratio (1.618...), an odd number. A common choice for multiplicative hashing.
-  // - Multiplying mixes each input bit into the bits ABOVE it, so the top bits of the product
-  //   are the well-mixed ones. That is why home_entry keeps the top bits (hash_shift).
-  // - Odd, so the multiply never loses information.
-  // - The payload checksum uses the same number (kChecksumMultiplier, ring_slot.hpp).
-  static constexpr std::uint64_t kHashMultiplier = 0x9E3779B97F4A7C15;
 
   // Startup only. resize() value-initialises every entry, which faults every page in now.
   // - Nothing pins the pages afterwards; the benchmark's zero-page-fault gate would show it if
@@ -178,10 +169,10 @@ class OrderTable {
 
   // Where a find for id starts.
   EntryIndex home_entry(std::uint64_t id) const {
-    return static_cast<EntryIndex>((id * kHashMultiplier) >> hash_shift);
+    return static_cast<EntryIndex>((id * kGoldenRatioMultiplier) >> hash_shift);
   }
 
-  // Asks for id's home entry ahead of the event that needs it (FeedBook::apply_batch).
+  // Asks for id's home entry ahead of the event that needs it.
   void prefetch(std::uint64_t id) const {
     __builtin_prefetch(&entries[home_entry(id)]);
   }

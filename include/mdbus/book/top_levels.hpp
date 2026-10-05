@@ -1,10 +1,11 @@
 #pragma once
 
-// The best 6 levels of one book side, and the two rules the writer and the test readers share.
+// TopLevels, one side's top levels (feed_book.hpp), and the two rules the writer and the test
+// readers share.
 // - FeedBook keeps each side's TopLevels with apply_level_change, and publishes what
 //   diff_top_levels returns as a BookDelta.
-// - A reader applies those entries with the same apply_level_change (tests/test_helpers.hpp).
-//   The writer and the test readers apply the same rule, so their copies must end equal.
+// - Test readers apply those entries with the same apply_level_change (tests/test_helpers.hpp),
+//   so their copies must end equal to the writer's.
 
 #include <cstddef>
 #include <cstdint>
@@ -27,8 +28,8 @@ struct TopLevels {
 
 // Applies one level entry: qty 0 removes the level, any other qty sets it to that absolute
 // quantity (inserting it if new), and the side then keeps only its best 6.
-// - Quantities are absolute, so applying an entry twice leaves the same result; recovery's
-//   seq > last_included_seq filter relies on that.
+// - Recovery does not rely on applying an entry twice: it delivers each delta once, by seq, and
+//   absolute quantities make a snapshot plus the deltas after it exact.
 // Example (a bid side holding 101x5, 100x3, 99x7):
 //   {102, 4} -> 102x4, 101x5, 100x3, 99x7   (insert)
 //   {100, 9} -> 101x5, 100x9, 99x7          (update)
@@ -90,10 +91,12 @@ inline std::size_t find_price_position(const TopLevels& side_levels, std::int32_
 // many. delta_entries needs room for 2 x 6 (every level removed, 6 new ones).
 // - Removals go first, so the reader's copy shrinks to the levels both share before the new
 //   ones arrive, and the cut to 6 never drops a level `after` needs.
-// - An event changes at most two levels of one side, plus the refill, so in practice this is at
-//   most BookDelta::kMaxEntries = 3 entries.
-// Example (bid side): before 101x5, 100x3, 99x7; after 102x4, 101x5, 99x2
-//   -> 3 entries: {100, 0}, {102, 4}, {99, 2}   (the removal first, then best first)
+// - One event gives at most BookDelta::kMaxEntries = 3 entries, and the bound is reached. Both
+//   3-entry cases are a replace: its old level empties, a 7th level is pulled up and its new
+//   (shown) level changes; or its old level shrinks, its new level is inserted and the 6th is
+//   pushed out. A refill and a push-out in one event cancel, leaving 2.
+// Example (a full bid side 106..101 x1, 100x1 behind it; a replace moves order 104x1 to 102):
+//   -> 3 entries: {104, 0}, {102, 2}, {100, 1}   (the removal first, then best first)
 inline std::size_t diff_top_levels(const TopLevels& before, const TopLevels& after,
                                    Level* delta_entries) {
   std::size_t count = 0;

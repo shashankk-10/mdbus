@@ -13,10 +13,11 @@
 #include <cstdint>
 #include <string>
 
-#include "mdbus/bus_writer.hpp"
-#include "mdbus/consumer.hpp"
-#include "mdbus/wait_policy.hpp"
 #include "baseline/mutex_ring.hpp"
+#include "mdbus/bus_reader.hpp"
+#include "mdbus/bus_writer.hpp"
+#include "mdbus/ring.hpp"
+#include "mdbus/snapshot_table.hpp"
 
 namespace mdbus::baseline {
 
@@ -33,7 +34,6 @@ struct Base {
   // 7 payload words: with the stamp, one 64 B half of the slot.
   static constexpr std::size_t kPayloadWords = kDefaultPayloadWords;
   static constexpr std::size_t kSlotBytes = kCacheLineBytes;  // 128 B, one M1 cache line
-  using WaitPolicy = SpinWait;  // what a reader does while its next message is not ready
   // true: readers wait on a head stored after every publish (the HeadPoll variant).
   static constexpr bool kReadersPollHead = false;
 };
@@ -54,6 +54,21 @@ static_assert(sizeof(Slot<StdAtomics, 15>) == kCacheLineBytes &&
 template <class Variant>
 using VariantLayout =
     BusLayout<DefaultSchema, kDefaultSlotCount, Variant::kPayloadWords, Variant::kSlotBytes>;
+
+// The steps of Publisher::publish_with_latency_start, which refuses a delta published without its
+// snapshot (no bench reader rebuilds a book). It takes the Publisher, as that member did, so the
+// paced writer's machine code is the same as when it called that member.
+template <class Layout>
+std::uint64_t publish_delta_with_latency_start(Publisher<Layout>& publisher,
+                                               std::uint16_t instrument_id, const BookDelta& delta,
+                                               std::uint64_t latency_start_ticks) {
+  const std::uint64_t seq = publisher.next_seq();
+  typename Layout::PayloadWords words =
+      Publisher<Layout>::encode_payload(seq, instrument_id, delta, latency_start_ticks);
+  write_publish_ticks(words);
+  publisher.publish_encoded_words(words);
+  return seq;
+}
 
 template <class Variant, class Sync = typename Variant::Sync>
 struct VariantBus;
@@ -79,11 +94,12 @@ struct VariantBus<Variant, StampProtocol> {
       return bus_writer.publisher().next_seq();
     }
 
-    // Publishes one delta. publish_with_latency_start reads publish_ticks right before the odd
-    // stamp store, so the hop starts inside the publish.
+    // Publishes one delta. publish_ticks is read right before the odd stamp store, so the hop
+    // starts inside the publish.
     void publish(std::uint16_t instrument_id, const BookDelta& delta,
                  std::uint64_t latency_start_ticks) {
-      bus_writer.publisher().publish_with_latency_start(instrument_id, delta, latency_start_ticks);
+      publish_delta_with_latency_start(bus_writer.publisher(), instrument_id, delta,
+                                       latency_start_ticks);
       store_head();
     }
 
@@ -114,7 +130,6 @@ struct VariantBus<Variant, StampProtocol> {
     BusReader<Layout> bus_reader;
     RingReader<StdAtomics, Layout> ring_reader;
     SnapshotTable<StdAtomics> snapshot_table;
-    typename Variant::WaitPolicy wait_policy;
 
     bool open(const std::string& name) {
       if (bus_reader.open(name, kOpenTimeoutNs) != Status::Ok) return false;
@@ -139,9 +154,7 @@ struct VariantBus<Variant, StampProtocol> {
       return ring_reader.head_hint();
     }
 
-    void idle() {
-      wait_policy.idle();
-    }
+    void idle() {}  // spin: the next poll is the wait, for the E-core slow reader too
 
     bool has_snapshots() const {
       return true;

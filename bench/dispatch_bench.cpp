@@ -1,11 +1,10 @@
 // The dispatch decision in isolation: the cost of getting one payload into the reader's work.
-// - static: Schema::dispatch into a template handler, what Consumer<Derived> compiles to.
+// - static: Schema::dispatch into a template handler: the dispatch inside Consumer<Derived>,
+//   without Consumer's recovery filter and bookkeeping.
 // - virtual: the same handler behind an interface pointer, as for a handler registered at run
 //   time.
 // - In-process over the encoded payload pool, in timed batches: no bus, no readers, no spinning.
-// - Exit codes: 0 ok, 2 bad option or the row could not be written, 4 smoke run measured
-//   nothing.
-//   mdbus_bench_dispatch --dispatch static|virtual --duration-ms T --out DIR
+// - Exit codes: bench_args.hpp's.
 
 #include <cstdio>
 #include <cstring>
@@ -29,8 +28,15 @@ constexpr std::size_t kMaxBatches = 65536;  // the run ends early once they are 
 
 constexpr double kDefaultDurationMs = 2000;  // --duration-ms
 
-constexpr int kExitBadUsage = 2;      // bad option, or the row could not be written
-constexpr int kExitSmokeFailed = 4;   // --smoke and the run measured nothing
+// The command line (bench_args.hpp).
+constexpr const char* kUsage =
+    "[--dispatch static|virtual] [--duration-ms MS] [--seed N] [--smoke 0|1] [--out DIR]";
+constexpr OptionRule kOptionRules[] = {
+    {.key = "--dispatch", .choices = "static|virtual"},
+    {.key = "--duration-ms", .min_value = 1, .max_value = kMaxPhaseMs},
+    {.key = "--seed"},
+    {.key = "--smoke", .max_value = 1},
+};
 
 // SimulatedReaderWork behind an interface, as for a handler registered at run time.
 struct DispatchHandler {
@@ -69,7 +75,7 @@ struct DispatchHandler {
   }
 }
 
-// Dispatches message_count pool payloads statically, as Consumer<Derived> does.
+// Dispatches message_count pool payloads statically, through the Schema::dispatch Consumer uses.
 [[gnu::noinline]] void run_static(SimulatedReaderWork& work, const PayloadPool& pool,
                                   std::uint64_t message_count) {
   for (std::uint64_t k = 0; k < message_count; ++k) {
@@ -94,11 +100,6 @@ int main(int argc, char** argv) {
   const auto duration_ms =
       static_cast<std::uint64_t>(args.number("--duration-ms", kDefaultDurationMs));
   const auto seed = static_cast<std::uint64_t>(args.number("--seed", 1));
-
-  if (mode != "static" && mode != "virtual") {
-    std::fprintf(stderr, "--dispatch static|virtual\n");
-    return kExitBadUsage;
-  }
   const bool virtual_dispatch = mode == "virtual";
 
   static PayloadPool pool;  // one in ten a trade, as in the bus benchmark
@@ -142,7 +143,9 @@ int main(int argc, char** argv) {
 
   const bool wrote = finish_row(row, failed_gates, out);
   print_dispatch_summary(row);
-  if (args.number("--smoke", 0) != 0 && row.number("dispatch_ns") <= 0) return kExitSmokeFailed;
-  if (!wrote) return kExitBadUsage;
+  if (args.number("--smoke", 0) != 0 && row.number("dispatch_ns") <= 0) return kExitMeasuredNothing;
+  if (!wrote) return kExitRunFailed;
   return 0;
 }
+
+const CommandLineRules mdbus::bench::kCommandLineRules{kUsage, kOptionRules};

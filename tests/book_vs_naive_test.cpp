@@ -1,12 +1,15 @@
 // The book against two references.
 // - A simple model that shares no code with FeedBook: a std::map of levels per side. After every
 //   event the final book's top levels must equal the model's first K.
-// - The differential oracle: the old F0 book and each ladder config replay one event stream in
+// - The differential oracle: the naive F0 book and each ladder config replay one event stream in
 //   lock step. After every event the config's output and the changed instrument's snapshot must
 //   equal F0's byte for byte; at the end every snapshot must, and the order index must pass its
 //   reachability check.
 // - Hand-built events each config must refuse exactly as F0 does: prices outside the window, a
-//   duplicate id, an order past the live cap, a bad side.
+//   duplicate id, a bad side, a level total that would wrap, an order past the live cap.
+// - Hand-built events for rules a generated stream never reaches: unknown ids, oversized
+//   cancels and executes, the wrap refusal's effect on a refill, became_bad only once,
+//   executing 0, the snapshot's time.
 // - F0 shares FeedBook's top-K code with every config, which is why the model comes first.
 
 #include <array>
@@ -27,6 +30,7 @@ using namespace mdbus::book;
 namespace {
 
 constexpr std::size_t kEventsPerBatch = 64;
+constexpr std::uint32_t kTwoTo31 = std::uint32_t{1} << 31;  // two such adds wrap a uint32 to 0
 
 // The model's side: price -> total quantity.
 using ModelLevels = std::map<std::int32_t, std::int64_t>;
@@ -184,6 +188,11 @@ bool results_match_f0(FeedBook<F0>& naive, FeedBook<BookConfig>& book, const Ord
   return std::memcmp(&x, &y, sizeof x) == 0;
 }
 
+// True when publish_book_output would publish nothing for this output.
+bool publishes_nothing(const BookOutput& output) {
+  return output.delta.entry_count == 0 && !output.became_bad && output.trade.qty == 0;
+}
+
 OrderEvent add_event(const InstrumentInfo& def, std::uint16_t instrument_id, std::uint64_t id,
                      std::int32_t price, Side side) {
   OrderEvent e{};
@@ -195,6 +204,14 @@ OrderEvent add_event(const InstrumentInfo& def, std::uint16_t instrument_id, std
   e.side = side;
   e.symbol = def.symbol;
   return e;
+}
+
+// The hand-built cases' instrument list: one instrument, reference_price 10000.
+std::vector<InstrumentInfo> one_instrument() {
+  std::vector<InstrumentInfo> instrument_list(1);
+  instrument_list[0].symbol = symbol_for_id(0);
+  instrument_list[0].reference_price = 10'000;
+  return instrument_list;
 }
 
 // Hand-built adds that BookConfig must accept or refuse exactly as F0 does, with the same reason.
@@ -228,9 +245,17 @@ void check_refusals() {
   e.side = static_cast<Side>(2);
   CHECK(results_match_f0(naive, book, e, RejectReason::Malformed));
 
-  // Orders 1 and 2 are live. Fill to the live cap with bids one tick apart, then one more.
+  // Two adds of 2^31 at one price: the second would wrap the level's 32-bit total to 0.
+  e = add_event(instrument_list[1], 1, 6, instrument_list[1].reference_price, Side::Bid);
+  e.qty = kTwoTo31;
+  CHECK(results_match_f0(naive, book, e, RejectReason::None));
+  e.order_id = 7;
+  CHECK(results_match_f0(naive, book, e, RejectReason::LevelTotalOverflow));
+
+  // Orders 1, 2 and 6 are live (a refused add leaves no order behind). Fill to the live cap with
+  // bids one tick apart, then one more.
   const std::uint32_t cap = max_live_orders_for(kSmallestTableLog2);
-  for (std::uint32_t live = 2; live < cap; ++live) {
+  for (std::uint32_t live = 3; live < cap; ++live) {
     const std::int32_t price = ref - static_cast<std::int32_t>(live);
     e = add_event(instrument_list[0], 0, 100 + live, price, Side::Bid);
     CHECK(results_match_f0(naive, book, e, RejectReason::None));
@@ -238,33 +263,37 @@ void check_refusals() {
   e = add_event(instrument_list[0], 0, 100 + cap, ref - 100, Side::Bid);
   CHECK(results_match_f0(naive, book, e, RejectReason::OrderTableFull));
 
-  CHECK(naive.counters().refused_adds == 5 && book.counters().refused_adds == 5);
+  CHECK(naive.counters().refused_adds == 6 && book.counters().refused_adds == 6);
 }
 
 }  // namespace
 
-// The final book against the std::map model, after every event.
+// The final book against the std::map model, after every event. The default stream empties a
+// shown level of a full side twice in 300 K events; the thin one (32 instruments, 4096 live
+// orders) 370 times, so it is the run that tests the refill from the ladder.
 TEST(final_book_matches_a_simple_model) {
   GeneratorConfig config;
   config.seed = 5;
   CHECK(count_mismatches_vs_map_model(config, 300'000) == 0);
+  config.instrument_count = 32;
+  config.target_live_orders = 4096;
+  CHECK(count_mismatches_vs_map_model(config, 300'000) == 0);
 }
 
-// Every config against F0 in lock step on one generated stream, byte for byte.
+// Every config against F0 in lock step on one generated stream, byte for byte. F3 is left out:
+// it is F4 without the prefetch, which cannot change a result.
 TEST(oracle_uniform) {
   GeneratorConfig config;
   config.seed = 11;
   CHECK(count_mismatches_vs_f0<F1>(config, 15, 256'000) == 0);
   CHECK(count_mismatches_vs_f0<F2>(config, 15, 256'000) == 0);
-  CHECK(count_mismatches_vs_f0<F3>(config, 15, 256'000) == 0);
   CHECK(count_mismatches_vs_f0<F4>(config, 15, 256'000) == 0);
 }
 
-// The hand-built bad events: each config refuses them exactly as F0 does.
+// The hand-built bad events: each config refuses them exactly as F0 does (F3 left out, as above).
 TEST(oracle_refusals) {
   check_refusals<F1>();
   check_refusals<F2>();
-  check_refusals<F3>();
   check_refusals<F4>();
 }
 
@@ -272,18 +301,16 @@ TEST(oracle_refusals) {
 // counted apart. A cancel larger than the order removes the whole order; so does an execution,
 // whose trade still reports the size the exchange printed.
 TEST(unknown_instruments_and_orders) {
-  std::vector<InstrumentInfo> instrument_list(1);
-  instrument_list[0].symbol = symbol_for_id(0);
-  instrument_list[0].reference_price = 10'000;
+  const std::vector<InstrumentInfo> instrument_list = one_instrument();
   FeedBook<> book(instrument_list, 4);
 
   OrderEvent e = add_event(instrument_list[0], 5, 1, 10'000, Side::Bid);  // instrument 5 of 1
-  CHECK(!book.apply(e).has_anything_to_publish());
+  CHECK(publishes_nothing(book.apply(e)));
 
   OrderEvent cancel{};
   cancel.type = EventType::Cancel;
   cancel.order_id = 2;  // never added
-  CHECK(!book.apply(cancel).has_anything_to_publish());
+  CHECK(publishes_nothing(book.apply(cancel)));
 
   e = add_event(instrument_list[0], 0, 3, 10'000, Side::Bid);
   book.apply(e);
@@ -307,6 +334,119 @@ TEST(unknown_instruments_and_orders) {
   CHECK(s.events_applied == 6 && s.refused_adds == 0);
 }
 
-int main(int argc, char** argv) {
-  return mdbus_test::run_main(argc, argv);
+// Two adds of 2^31 at one price behind a full side would wrap the level's 32-bit total to 0.
+// The second is refused and marks the instrument bad; the level keeps the first add's total, so
+// a refill shows it as it is. Unchecked, the wrapped level stayed in the ladder with qty 0, a
+// refill showed it as {9999, 0} (which consumers read as "not shown"), and nothing was flagged.
+TEST(add_that_would_wrap_its_level_total_is_refused) {
+  const std::vector<InstrumentInfo> instrument_list = one_instrument();
+  FeedBook<> book(instrument_list, 6);
+
+  // A full bid side 10010..10005 (orders 1..6, qty 1), then 2^31 at 9999 below the 6th.
+  for (std::uint64_t id = 1; id <= 6; ++id) {
+    OrderEvent e =
+        add_event(instrument_list[0], 0, id, 10'011 - static_cast<std::int32_t>(id), Side::Bid);
+    e.qty = 1;
+    book.apply(e);
+  }
+  OrderEvent e = add_event(instrument_list[0], 0, 7, 9'999, Side::Bid);
+  e.qty = kTwoTo31;
+  CHECK(publishes_nothing(book.apply(e)));
+
+  e.order_id = 8;
+  const BookOutput refused = book.apply(e);
+  CHECK(refused.reject_reason == RejectReason::LevelTotalOverflow && refused.became_bad &&
+        refused.delta.entry_count == 0);
+  CHECK(book.counters().refused_adds == 1 && book.order_index().live_orders() == 7);
+
+  // Cancelling the best bid refills the 6th with 9999 and the first add's 2^31.
+  OrderEvent cancel{};
+  cancel.type = EventType::Cancel;
+  cancel.order_id = 1;
+  const BookOutput refill = book.apply(cancel);
+  CHECK(refill.delta.entry_count == 2 && refill.delta.entries[0].price == 10'010 &&
+        refill.delta.entries[0].qty == 0 && refill.delta.entries[1].price == 9'999 &&
+        refill.delta.entries[1].qty == kTwoTo31);
+  const TopLevels& bids = book.top_levels(0, 0);
+  CHECK(bids.count == 6 && bids.levels[5].price == 9'999 && bids.levels[5].qty == kTwoTo31);
+
+  InstrumentSnapshot snapshot;
+  book.fill_snapshot(0, snapshot);
+  CHECK((snapshot.instrument_flags & kInstrumentBad) != 0);
+  // Order 8 was never stored.
+  cancel.order_id = 8;
+  CHECK(publishes_nothing(book.apply(cancel)) && book.counters().unknown_orders == 1);
+}
+
+// Only the refusal that marks the instrument bad says became_bad: the flag is never cleared, so
+// a later refusal is counted and names its reason, but publishes nothing.
+TEST(became_bad_only_on_the_first_refusal) {
+  const std::vector<InstrumentInfo> instrument_list = one_instrument();
+  FeedBook<> book(instrument_list, 4);
+
+  OrderEvent e = add_event(instrument_list[0], 0, 1, 10'000 + kMaxPriceOffset + 1, Side::Ask);
+  const BookOutput first = book.apply(e);
+  e.order_id = 2;
+  const BookOutput second = book.apply(e);
+  CHECK(first.became_bad && first.reject_reason == RejectReason::PriceOutsideWindow);
+  CHECK(!second.became_bad && second.reject_reason == RejectReason::PriceOutsideWindow);
+  CHECK(publishes_nothing(second) && book.counters().refused_adds == 2);
+}
+
+// Executing 0 is a no-op: no trade, no delta, the order keeps its qty. Cancelling 0 removes the
+// whole order.
+TEST(execute_of_zero_changes_nothing) {
+  const std::vector<InstrumentInfo> instrument_list = one_instrument();
+  FeedBook<> book(instrument_list, 4);
+  book.apply(add_event(instrument_list[0], 0, 1, 10'000, Side::Bid));
+
+  OrderEvent reduce{};
+  reduce.type = EventType::Execute;
+  reduce.order_id = 1;
+  CHECK(publishes_nothing(book.apply(reduce)));
+  CHECK(book.top_levels(0, 0).count == 1 && book.top_levels(0, 0).levels[0].qty == 100);
+
+  reduce.type = EventType::Cancel;
+  const BookOutput cancelled = book.apply(reduce);
+  CHECK(cancelled.delta.entry_count == 1 && cancelled.delta.entries[0].qty == 0);
+  CHECK(book.top_levels(0, 0).count == 0 && book.order_index().live_orders() == 0);
+}
+
+// The snapshot's exchange_time_ns is that of the last event consumers saw change something: a
+// change to the shown levels, or the refusal that marked the instrument bad. A trade at a level
+// not shown leaves it alone.
+TEST(snapshot_time_is_the_last_shown_change) {
+  const std::vector<InstrumentInfo> instrument_list = one_instrument();
+  FeedBook<> book(instrument_list, 6);
+  auto snapshot_time = [&] {
+    InstrumentSnapshot snapshot;
+    book.fill_snapshot(0, snapshot);
+    return snapshot.exchange_time_ns;
+  };
+
+  // A full bid side 10006..10001 at times 101..106, then order 7 below it at time 200.
+  for (std::uint64_t id = 1; id <= 6; ++id) {
+    OrderEvent e =
+        add_event(instrument_list[0], 0, id, 10'007 - static_cast<std::int32_t>(id), Side::Bid);
+    e.exchange_time_ns = 100 + id;
+    book.apply(e);
+  }
+  OrderEvent e = add_event(instrument_list[0], 0, 7, 10'000, Side::Bid);
+  e.exchange_time_ns = 200;
+  book.apply(e);
+  CHECK(snapshot_time() == 106);
+
+  OrderEvent execute{};
+  execute.type = EventType::Execute;
+  execute.order_id = 7;  // not shown
+  execute.qty = 10;
+  execute.exchange_time_ns = 300;
+  CHECK(book.apply(execute).trade.qty == 10 && snapshot_time() == 106);
+  execute.order_id = 1;  // the best bid
+  execute.exchange_time_ns = 400;
+  CHECK(book.apply(execute).delta.entry_count == 1 && snapshot_time() == 400);
+
+  e = add_event(instrument_list[0], 0, 8, 10'000 + kMaxPriceOffset + 1, Side::Ask);
+  e.exchange_time_ns = 500;
+  CHECK(book.apply(e).became_bad && snapshot_time() == 500);
 }

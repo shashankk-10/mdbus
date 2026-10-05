@@ -1,32 +1,31 @@
-// The bus benchmark: one binary per variant (baseline/bus_variants.hpp), run by
-// scripts/compare.py and the bench targets in CMakeLists.txt. It writes one row.csv per run.
-// - Run with no --role, it is the launcher. It spawns the roles below from this same
-//   executable, each in its own process, and talks to them through a BenchControl segment.
-// - Launcher flow: check the clock, create the control segment, start the writer and wait until
-//   its bus exists, start the readers and wait for them, set go, sleep through warm-up and the
-//   window, set stop, reap every role, apply the gates and write row.csv.
+// The bus benchmark: one binary per variant (baseline/bus_variants.hpp). It writes one row.csv
+// per run.
+// - Run with no --role, it is the launcher (launch() below). It spawns the roles below from this
+//   same executable, each in its own process, and talks to them through a BenchControl segment.
 // - Two scenarios. Paced (--rate > 0): open-loop, message i is due at a fixed tick whether or
 //   not the writer kept up. W-sat (--rate 0): unpaced, the writer publishes flat out.
-// - hop = read tick - publish_ticks (the bus alone). e2e = read tick - latency_start_ticks (the
-//   due tick, so it also counts a writer running late).
-// - Exit codes: 0 the row was written (failed gates set valid = 0 in it), 2 kExitRunFailed,
-//   3 kExitSetupFailed, 4 kExitMeasuredNothing.
+// - hop = read tick - publish_ticks: the ring hop, since the fast reader polls RingReader
+//   directly and none of Consumer's per-message work is in it. e2e = read tick -
+//   latency_start_ticks (the due tick, so it also counts a writer running late).
+// - Exit codes: bench_args.hpp's, and src/command_line.hpp's kExitSetupFailed for a role that
+//   could not open its bus or histograms.
 //
 // The roles:
 //   writer  P-core. Publishes paced, or in W-sat in timed batches of 16384 publishes.
 //   fast    P-core. Records hop and e2e. In W-sat it only copies and validates. --fast 0
 //           leaves it out: the writer's cost with no reader at all.
-//   slow    E-core, --slow read: 500 ns of work per message, so it can fall behind and lap;
-//           reads one snapshot every 64 messages (snap_mean_ns). --slow burn: the same
-//           work loop on an E-core, but it never maps a ring.
-//   relay   P-core, --relay 1: copies and validates every message of the hot ring and
-//           republishes it into a second bus. A slow reader then reads that bus instead.
+//   slow    E-core, --slow read: 500 ns of work per message, so at 1 M msg/s it is about half
+//           busy, keeps up and laps only now and then (laps_slow). Between messages it spins
+//           on the slot the writer writes next, as every reader here does: a caught-up,
+//           spin-waiting E-core reader, not the SleepWait slow reader of DESIGN.md §4.9. Reads
+//           one snapshot every 64 messages (snap_mean_ns).
 
 #include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <new>
 #include <string>
 #include <vector>
@@ -69,21 +68,27 @@ constexpr std::uint64_t kReadersReadyTimeoutMs = 15'000;  // readers opened and 
 constexpr std::uint64_t kRolesDoneTimeoutMs = 10'000;     // after the window: readers drained
 
 constexpr const char* kBenchBusPrefix = "bk";  // + the launcher's pid: "bk12345"
-constexpr const char* kRelayBusSuffix = "r";   // the relay's bus is the hot bus's name + "r"
 // A publish that starts more than one tick after its due tick counts as late.
 constexpr std::uint64_t kLateSlackTicks = 1;
 constexpr std::size_t kMaxTimedBatches = 262144;  // W-sat alone fills about 25,000 a second
 
-// Exit codes. 0: the run completed and wrote its row, whatever the gates said.
-constexpr int kExitRunFailed = 2;         // aborted, row not written, or a bad role or segment
-constexpr int kExitSetupFailed = 3;       // a role could not open its bus or histograms
-constexpr int kExitMeasuredNothing = 4;   // --smoke: the run measured nothing
+// The command line (bench_args.hpp). --role and --name are the launcher's, for its roles.
+constexpr const char* kUsage =
+    "[--rate MSG_PER_S, 0 for W-sat] [--duration-ms MS] [--warmup-ms MS] [--seed N] [--fast 0|1] "
+    "[--slow off|read] [--smoke 0|1] [--out DIR]";
+constexpr OptionRule kOptionRules[] = {
+    {.key = "--rate"},
+    {.key = "--duration-ms", .min_value = 1, .max_value = kMaxPhaseMs},
+    {.key = "--warmup-ms", .max_value = kMaxPhaseMs},
+    {.key = "--seed"},
+    {.key = "--fast", .max_value = 1},
+    {.key = "--smoke", .max_value = 1},
+    {.key = "--slow", .choices = "off|read"},
+};
 
-BenchControl* bench_control = nullptr;
 // Mapped by every process: the launcher creates it, each role maps it in main.
-//
-// The progress of the bus this role reads: the hot bus (set in main), or the relay's bus for a
-// slow reader behind a relay (set in run_slow).
+BenchControl* bench_control = nullptr;
+// The progress of the bus the readers read (set in main).
 // - A global, not a parameter of read_until_done: as a parameter it costs the fast reader's
 //   per-message path an instruction (checked in the disassembly).
 const BusProgress* read_progress = nullptr;
@@ -93,54 +98,44 @@ struct Options {
   std::string role;  // empty in the launcher
   std::string name;  // the hot bus name; the launcher picks it
   std::string out_dir;
-  std::string slow_mode;  // off, read or burn
-  double rate;
-  std::uint64_t duration_ms;
-  std::uint64_t warmup_ms;
+  std::string slow_mode;  // off or read
+  double rate;            // messages per second; 0 means W-sat
+  std::uint64_t duration_ms;  // the window
+  std::uint64_t warmup_ms;    // before it
   std::uint64_t seed;
   bool with_fast_reader;
-  bool with_relay;
   bool is_smoke_run;
 
+  // Every value was checked against kOptionRules (BenchArgs::text), so each cast is exact.
   explicit Options(const BenchArgs& args)
       : role(args.text("--role", "")),
         name(args.text("--name", "")),
         out_dir(args.text("--out", ".")),
         slow_mode(args.text("--slow", "off")),
-        rate(args.number("--rate", 1e6)),  // messages per second; 0 means W-sat
-        duration_ms(static_cast<std::uint64_t>(args.number("--duration-ms", 2000))),  // window
-        warmup_ms(static_cast<std::uint64_t>(args.number("--warmup-ms", 300))),  // before it
+        rate(args.number("--rate", 1e6)),
+        duration_ms(static_cast<std::uint64_t>(args.number("--duration-ms", 2000))),
+        warmup_ms(static_cast<std::uint64_t>(args.number("--warmup-ms", 300))),
         seed(static_cast<std::uint64_t>(args.number("--seed", 1))),
         with_fast_reader(args.number("--fast", 1) != 0),
-        with_relay(args.number("--relay", 0) != 0),
         is_smoke_run(args.number("--smoke", 0) != 0) {}
 };
 
-// Process counters over the measurement window.
-// - start() does nothing once open, so a role calls it on any event it sees inside the window
-//   and the first such call reads the counters. Warm-up work stays out of them.
-struct CounterWindow {
-  ProcessCounters at_start;
-  bool is_open = false;
-
-  void start() {
-    if (is_open) return;
-    at_start = ProcessCounters::read();
-    is_open = true;
-  }
-
-  ProcessCounters end() const {
-    if (!is_open) return ProcessCounters{};
-    return ProcessCounters::read() - at_start;
-  }
-};
+// A role's sleep while it polls the control segment: before go, and the writer's while readers
+// drain. A role whose launcher died (it was adopted by launchd, pid 1) exits here instead of
+// waiting forever.
+// - Out of line, and shaped like usleep: main inlines the roles, and an orphan check inlined in
+//   their wait loops changes the code around their measured loops.
+[[gnu::noinline]] void poll_sleep(useconds_t microseconds) {
+  usleep(microseconds);
+  if (getppid() == 1) std::exit(kExitRunFailed);
+}
 
 // Reports ready, then sleeps until go. False if the launcher stopped the run first.
 bool report_ready_and_wait_for_go(RoleResults& result) {
   result.state.store(kReady, std::memory_order_release);
   while (bench_control->command.go.load(std::memory_order_acquire) == 0) {
     if (bench_control->command.stop.load(std::memory_order_acquire) != 0) return false;
-    usleep(kGoPollMicroseconds);
+    poll_sleep(kGoPollMicroseconds);
   }
   return true;
 }
@@ -163,11 +158,8 @@ struct WriterSpan {
   std::uint64_t last_tick = 0;
 };
 
-// Paced writer loop: publishes message i at its due tick on the open-loop schedule.
-// - Open loop: the due tick depends only on go_tick and i, never on when the previous publish
-//   finished, so a writer that falls behind publishes its backlog late instead of offering less.
-// - The due tick is the message's latency start, so e2e includes that lateness; hop does not.
-// - A publish more than kLateSlackTicks after its due tick counts in late_publishes.
+// Paced writer loop: publishes message i at its due tick on the open-loop schedule (due_tick).
+// - Each message's latency start is its due tick, and a late publish counts in late_publishes.
 // - Every kMessagesPerSnapshotWrite messages it also writes one snapshot, for the slow reader.
 WriterSpan publish_paced(Bus::Writer& writer, const std::vector<SyntheticDelta>& events,
                          double rate, RoleResults& result) {
@@ -203,7 +195,7 @@ WriterSpan publish_paced(Bus::Writer& writer, const std::vector<SyntheticDelta>&
     }
   }
 
-  // A writer behind schedule publishes its backlog late.
+  // A writer behind schedule published past window_end_tick.
   span.last_tick = std::max(window_end_tick, read_ticks());
   return span;
 }
@@ -282,11 +274,12 @@ int run_writer(const Options& options, RoleResults& result) {
   result.wsat_cycles_per_publish = batches.median_cycles();
   mark_done(result);
 
-  // 5. Stay alive, heartbeating, until the launcher says stop: readers may still be draining
-  //    and an exited writer would look dead to them.
+  // 5. Stay alive, heartbeating, until the launcher says stop (poll_sleep exits once it has
+  //    died), so the bus keeps a live writer while readers drain. No reader here checks the
+  //    writer's liveness, but a Consumer would see an exited writer as Down.
   while (!stop_requested()) {
     writer.heartbeat_if_due();
-    usleep(kDrainSleepMicroseconds);
+    poll_sleep(kDrainSleepMicroseconds);
   }
   return 0;
 }
@@ -296,9 +289,10 @@ int run_writer(const Options& options, RoleResults& result) {
 // - Ok: on_message(payload), then the next seq.
 // - Lapped: count the lap and the lost messages, resume at the writer's head hint (at least
 //   one past the lost seq, so a stale hint cannot loop).
-// - NotWrittenYet: the variant's wait policy. Every kIdlePollsPerStopCheck idle polls it also
-//   opens the counter window if due, and checks stop and drain. Busy reading, it checks
-//   neither, which keeps the clock read off the per-message path.
+// - NotWrittenYet: reader.idle(), a spin (or the next locked poll, for Mutex). Every
+//   kIdlePollsPerStopCheck idle polls it also opens the counter window if due, and checks stop
+//   and drain. Busy reading, it checks neither, which keeps the clock read off the per-message
+//   path.
 template <class MessageHandler>
 void read_until_done(Bus::Reader& reader, RoleResults& result, CounterWindow& counter_window,
                      MessageHandler&& on_message) {
@@ -386,40 +380,15 @@ int run_fast(const Options& options, RoleResults& result) {
   return 0;
 }
 
-// The slow reader role, on an E-core: 500 ns of work per message, so it can fall behind and lap.
-// - --slow read: reads the hot bus (or the relay's bus) and times one snapshot read every
-//   kMessagesPerSnapshotRead messages.
-// - --slow burn: the same work loop with no bus mapped, to separate "an E-core is busy" from
-//   "an E-core reads the writer's lines".
+// The slow reader role, on an E-core: 500 ns of work per message, a caught-up spin-waiting
+// reader (see the file header). It times one snapshot read every kMessagesPerSnapshotRead
+// messages.
 int run_slow(const Options& options, RoleResults& result) {
   const std::uint64_t work_ticks = ns_to_ticks(kSlowReaderWorkNs);
-
-  // burn: the same E-core activity, with no line shared with the writer.
-  if (options.slow_mode == "burn") {
-    prefault_stack();
-    if (!report_ready_and_wait_for_go(result)) return 0;
-    const std::uint64_t window_end_tick = bench_control->command.window_end_tick;
-    CounterWindow counter_window;
-    while (!stop_requested() && read_ticks() < window_end_tick) {
-      if (read_ticks() >= bench_control->command.window_start_tick) counter_window.start();
-      spin_until_tick(read_ticks() + work_ticks);
-      ++result.messages_read;
-    }
-    result.process_counters = counter_window.end();
-    mark_done(result);
-    return 0;
-  }
-
   static Bus::Reader reader;  // static, as in run_fast
   static LatencyHistogram snapshot_read_latency;
-
-  // Under a relay the slow reader never maps the hot bus. No snapshots are relayed, so it reads
-  // none.
-  std::string bus_name = options.name;
-  if (options.with_relay) bus_name = options.name + kRelayBusSuffix;
-  if (!reader.open(bus_name)) return kExitSetupFailed;
+  if (!reader.open(options.name)) return kExitSetupFailed;
   if (!snapshot_read_latency.init()) return kExitSetupFailed;
-  if (options.with_relay) read_progress = &bench_control->relay_bus_progress;
   prefault_stack();
   if (!report_ready_and_wait_for_go(result)) return 0;
 
@@ -430,8 +399,7 @@ int run_slow(const Options& options, RoleResults& result) {
   read_until_done(reader, result, counter_window, [&](const PayloadWords&) {
     const std::uint64_t before_read = read_ticks();
     if (before_read >= window_start_tick) counter_window.start();
-    if (result.messages_read % kMessagesPerSnapshotRead == 0 && reader.has_snapshots() &&
-        !options.with_relay) {
+    if (result.messages_read % kMessagesPerSnapshotRead == 0 && reader.has_snapshots()) {
       const auto instrument_id = static_cast<std::uint16_t>(
           result.messages_read / kMessagesPerSnapshotRead % kInstrumentCount);
       const SnapshotReadResult read_result = reader.read_snapshot(instrument_id, snapshot);
@@ -452,36 +420,8 @@ int run_slow(const Options& options, RoleResults& result) {
   return 0;
 }
 
-// The relay role: one more P-core reader of the hot ring, and the only writer of the second
-// bus (name + kRelayBusSuffix). An E-core reader behind it shares no line with the hot writer.
-int run_relay(const Options& options, RoleResults& result) {
-  prefer_p_cores();
-  static Bus::Reader reader;  // static, as in run_writer
-  static Bus::Writer writer;
-  if (!writer.open(options.name + kRelayBusSuffix, kInstrumentCount)) return kExitSetupFailed;
-  if (!reader.open(options.name)) return kExitSetupFailed;
-  prefault_stack();
-  bench_control->relay_bus_progress.first_seq.store(writer.next_seq(), std::memory_order_relaxed);
-  if (!report_ready_and_wait_for_go(result)) return 0;
-
-  const std::uint64_t window_start_tick = bench_control->command.window_start_tick;
-  CounterWindow counter_window;
-  read_until_done(reader, result, counter_window, [&](const PayloadWords& payload) {
-    if (result.messages_read % kMessagesPerWindowCheck == 0 && read_ticks() >= window_start_tick)
-      counter_window.start();
-    writer.publish_encoded_words(payload);
-  });
-
-  result.process_counters = counter_window.end();
-  bench_control->relay_bus_progress.final_seq.store(writer.next_seq(), std::memory_order_relaxed);
-  bench_control->relay_bus_progress.writer_done.store(1, std::memory_order_release);
-  mark_done(result);
-  return 0;
-}
-
 // Starts the roles in order: the writer first, since readers start at the seq it publishes
-// once its bus is open; likewise the relay before the slow reader, which reads the relay's
-// bus. False if a role did not start or did not report ready.
+// once its bus is open. False if a role did not start or did not report ready.
 bool start_roles(const Options& options, const BenchArgs& args, const std::string& name,
                  std::vector<RoleProcess>& role_processes, std::string& aborted) {
   auto start = [&](Role role, bool e_core) {
@@ -493,16 +433,11 @@ bool start_roles(const Options& options, const BenchArgs& args, const std::strin
   };
 
   if (!start(kWriter, false)) return false;
-  if (!wait_until_all_ready(*bench_control, role_processes, kWriterReadyTimeoutMs, aborted))
+  if (!wait_until_all(*bench_control, role_processes, kReady, kWriterReadyTimeoutMs, aborted))
     return false;
   if (options.with_fast_reader && !start(kFastReader, false)) return false;
-  if (options.with_relay) {
-    if (!start(kRelay, false)) return false;
-    if (!wait_until_all_ready(*bench_control, role_processes, kReadersReadyTimeoutMs, aborted))
-      return false;
-  }
   if (options.slow_mode != "off" && !start(kSlowReader, true)) return false;
-  return wait_until_all_ready(*bench_control, role_processes, kReadersReadyTimeoutMs, aborted);
+  return wait_until_all(*bench_control, role_processes, kReady, kReadersReadyTimeoutMs, aborted);
 }
 
 // The eight columns of one latency histogram, named prefix_n, prefix_mean_ns and so on.
@@ -524,7 +459,6 @@ void write_result_columns(const Options& options, const std::vector<RoleProcess>
   const RoleResults& writer = bench_control->role_results[kWriter];
   const RoleResults& fast = bench_control->role_results[kFastReader];
   const RoleResults& slow = bench_control->role_results[kSlowReader];
-  const RoleResults& relay = bench_control->role_results[kRelay];
 
   row.set_integer("published", writer.messages_published);
   row.set_number("rate_achieved", writer.achieved_rate);
@@ -542,10 +476,6 @@ void write_result_columns(const Options& options, const std::vector<RoleProcess>
   row.set_integer("causality", fast.causality_violations);
   set_latency_columns(row, "hop", fast.hop);
   set_latency_columns(row, "e2e", fast.e2e);
-
-  row.set_integer("msgs_relay", relay.messages_read);
-  row.set_integer("laps_relay", relay.times_lapped);
-  row.set_integer("lost_relay", relay.messages_lost);
 
   row.set_integer("msgs_slow", slow.messages_read);
   row.set_integer("laps_slow", slow.times_lapped);
@@ -569,43 +499,31 @@ void write_result_columns(const Options& options, const std::vector<RoleProcess>
 
 // The gates on the roles' results: each one that fails adds its name to failed_gates, and
 // finish_row then writes the row with valid = 0.
-// - minflt_<role>: no minor page faults inside the window (every role but the burner).
+// - minflt_<role>: no minor page faults inside the window.
 // - pshare_<role>, ghz_<role>: the P-core roles really ran on a P-core at full clock.
-// - causality, fast_laps, relay_laps: below.
+// - causality, fast_laps: below.
 void check_gates(const Options& options, const std::vector<RoleProcess>& role_processes,
                  std::string& failed_gates) {
   const RoleResults& fast = bench_control->role_results[kFastReader];
-  const RoleResults& relay = bench_control->role_results[kRelay];
 
   for (const RoleProcess& process : role_processes) {
     const ProcessCounters& counters = bench_control->role_results[process.role].process_counters;
     const std::string role = kRoleNames[process.role];
-    // Gates protect the roles whose numbers are reported; the burner reports none.
-    const bool burner = process.role == kSlowReader && options.slow_mode == "burn";
-    if (!burner) {
-      add_failed_gate(failed_gates, counters.read_ok && counters.minor_page_faults == 0,
-                      "minflt_" + role);
-    }
-    // The P-core gates, for the roles meant to run on P-cores.
-    if (process.role != kSlowReader) {
-      add_failed_gate(failed_gates, counters.p_core_share() >= kMinPCoreShare, "pshare_" + role);
-      add_failed_gate(failed_gates, counters.effective_ghz() >= kMinPCoreGhz, "ghz_" + role);
-    }
+    add_failed_gate(failed_gates, counters.read_ok && counters.minor_page_faults == 0,
+                    "minflt_" + role);
+    if (process.role != kSlowReader) add_cpu_gates(failed_gates, counters, ("_" + role).c_str());
   }
 
   add_failed_gate(failed_gates, fast.causality_violations == 0, "causality");
-  // Paced runs must not lap, nor may the relay. An unpaced writer outruns a mutex reader by
-  // design, so W-sat reports laps and lost messages instead of gating on them.
+  // Paced runs must not lap. An unpaced writer outruns a mutex reader by design, so W-sat
+  // reports laps and lost messages instead of gating on them.
   add_failed_gate(failed_gates, options.rate <= 0 || fast.times_lapped == 0, "fast_laps");
-  add_failed_gate(failed_gates, options.rate <= 0 || relay.times_lapped == 0, "relay_laps");
 }
 
 // --smoke: whether the run measured something, whatever the gates said.
 // - W-sat: the writer timed some batches (wsat_ns).
 // - Paced: the fast reader took latency samples (hop_n), if there was a fast reader.
-// - With a relay: the relay read some messages, in either scenario.
 bool measured_something(const Options& options, const ResultRow& row) {
-  if (options.with_relay && row.number("msgs_relay") == 0) return false;
   if (options.rate <= 0) return row.number("wsat_ns") > 0;
   return !options.with_fast_reader || row.number("hop_n") > 0;
 }
@@ -621,12 +539,8 @@ void print_bus_summary(const ResultRow& row) {
                 row.number("rate_achieved"));
   }
 
-  std::string fast = "off";
-  if (row.text("fast") == "1") fast = "on";
-  std::string relay = "off";
-  if (row.text("relay") == "1") relay = "on";
-  std::printf("; fast reader %s, slow reader %s, relay %s\n", fast.c_str(),
-              row.text("slow").c_str(), relay.c_str());
+  const auto on_off = [&row](const char* column) { return row.text(column) == "1" ? "on" : "off"; };
+  std::printf("; fast reader %s, slow reader %s\n", on_off("fast"), row.text("slow").c_str());
 
   if (scenario == "wsat") {
     std::printf("  writer: %.2f ns, %.0f instructions per publish\n", row.number("wsat_ns"),
@@ -648,6 +562,13 @@ void print_bus_summary(const ResultRow& row) {
   print_conditions_line(row);
 }
 
+// Removes the names of everything a run creates: the bus (segment and lock file) and the
+// control segment. Removing a name that does not exist does nothing.
+void remove_names(const std::string& name, const std::string& control_name) {
+  destroy_bus(name);
+  shm_unlink(control_name.c_str());
+}
+
 // The launcher: runs the roles once and writes row.csv. Returns one of the exit codes in the
 // file header.
 int launch(const Options& options, const BenchArgs& args) {
@@ -658,7 +579,6 @@ int launch(const Options& options, const BenchArgs& args) {
   row.set_number("rate_offered", options.rate);
   row.set_integer("fast", options.with_fast_reader ? 1 : 0);
   row.set_text("slow", options.slow_mode);
-  row.set_integer("relay", options.with_relay ? 1 : 0);
   row.set_integer("duration_ms", options.duration_ms);
   row.set_integer("seed", options.seed);
 
@@ -679,10 +599,13 @@ int launch(const Options& options, const BenchArgs& args) {
     // The launcher constructs the control block in the new segment; roles map it and cast.
     bench_control = new (control_segment.address()) BenchControl();
 
-    // 3. Start the roles; once all are ready, set the window and go, then sleep through it.
+    // 3. Start the roles. Once all are ready, every role has mapped what it needs, so the names
+    //    go (a mapping outlives its name, and a launcher that dies from here on leaks nothing).
+    //    Then set the window and go, and sleep through it.
     std::vector<RoleProcess> role_processes;
     const bool started = start_roles(options, args, name, role_processes, aborted);
     if (started) {
+      remove_names(name, control_name);
       LauncherCommand& command = bench_control->command;
       command.go_tick = read_ticks();
       command.window_start_tick = command.go_tick + ms_to_ticks(options.warmup_ms);
@@ -691,13 +614,13 @@ int launch(const Options& options, const BenchArgs& args) {
       usleep(static_cast<useconds_t>((options.warmup_ms + options.duration_ms) *
                                      kMicrosecondsPerMillisecond));
       // The writer stops at window_end_tick; readers drain.
-      wait_until_all_done(*bench_control, role_processes, kRolesDoneTimeoutMs);
+      wait_until_all(*bench_control, role_processes, kDone, kRolesDoneTimeoutMs, aborted);
     } else if (aborted.empty()) {
       aborted = "spawn";
     }
 
-    // 4. Stop and reap every role. The first one that exited non-zero or never reported done
-    //    aborts the run.
+    // 4. Stop and reap every role. Unless the run already aborted, the first one that exited
+    //    non-zero or never reported done aborts it.
     bench_control->command.stop.store(1, std::memory_order_release);
     for (RoleProcess& process : role_processes) {
       const int exit_code = reap(process.pid);
@@ -714,11 +637,9 @@ int launch(const Options& options, const BenchArgs& args) {
     check_gates(options, role_processes, failed_gates);
   }
 
-  // 6. Remove every segment this run made, then write and print the row.
-  destroy_bus(name);
-  destroy_bus(name + kRelayBusSuffix);
-  shm_unlink(control_name.c_str());
-
+  // 6. Remove the names (a run that failed to start still has them), then write and print the
+  //    row.
+  remove_names(name, control_name);
   const bool wrote = finish_row(row, failed_gates, options.out_dir, aborted);
   print_bus_summary(row);
 
@@ -746,6 +667,7 @@ int main(int argc, char** argv) {
   if (options.role == "writer") return run_writer(options, bench_control->role_results[kWriter]);
   if (options.role == "fast") return run_fast(options, bench_control->role_results[kFastReader]);
   if (options.role == "slow") return run_slow(options, bench_control->role_results[kSlowReader]);
-  if (options.role == "relay") return run_relay(options, bench_control->role_results[kRelay]);
   return kExitRunFailed;
 }
+
+const CommandLineRules mdbus::bench::kCommandLineRules{kUsage, kOptionRules};

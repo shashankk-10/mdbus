@@ -3,10 +3,6 @@
 // One ring slot: the stamp, the message header, the payload words, and the payload checksum.
 // - Byte map of a default slot:
 //   [stamp 8 B][header 24 B][body 32 B] = 64 B used | 64 B padding = 128 B
-// - Publisher builds a Payload in registers and RingWriter copies its words into a Slot; Consumer
-//   copies them back out and reads the MessageHeader.
-// - Slot is a template on an atomic policy (atomic_policy.hpp): the bus uses StdAtomics, the test
-//   mutants use weakened copies of it.
 // - stamp: the slot's version word; its encoding is defined once, in ring.hpp.
 
 #include <array>
@@ -61,8 +57,9 @@ static_assert(sizeof(Payload<kDefaultPayloadWords>) == 56 &&
 //   padding, so two slots never share a 128 B cache line.
 // - Why not 64 B slots: two slots would then share each 128 B line, so a reader on the other
 //   cluster copying slot s would contend with the writer storing s + 1.
-// - Measured: 64 B slots are a little cheaper per publish at saturation, the same at 1 M msg/s.
-//   I keep 128 B as a hedge because macOS will not pin a reader to a cluster (DESIGN.md, Layout).
+// - Measured: 64 B slots are a little cheaper per publish at saturation, with no resolved
+//   difference at 1 M msg/s. I keep 128 B as a hedge because macOS will not pin a reader to a
+//   cluster (DESIGN.md §7).
 // - SlotBytes 64 exists for that Pad64 variant only.
 template <class Atomics, std::size_t PayloadWordCount = kDefaultPayloadWords,
           std::size_t SlotBytes = kCacheLineBytes>
@@ -78,48 +75,38 @@ static_assert(offsetof(Slot<StdAtomics>, payload_words) == kWordBytes &&
 
 // Payload checksum.
 
-// 2^64 / golden ratio (1.618...), an odd number. A common choice for multiplicative hashing.
-// - Multiplying mixes each input bit into the bits above it, so the top bits of the product are
-//   the well-mixed ones. That is why the checksum folds them down (x ^ (x >> 29)) before keeping
-//   the low 32 bits.
-// - Odd, so the multiply never loses information.
-// - book/order_table.hpp uses the same number for its hash (kHashMultiplier).
-constexpr std::uint64_t kChecksumMultiplier = 0x9E3779B97F4A7C15;
-
-// Copies high bits down so the final multiply mixes them into the low 32 bits we keep; a common
-// mixer shift, not tuned.
+// Copies high bits (the well-mixed ones of a multiply) down, so the final multiply mixes them into
+// the low 32 bits we keep; a common mixer shift, not tuned.
 constexpr unsigned kChecksumMixShift = 29;
 
 // A 32-bit hash of one payload and the seq it was published at.
-// - Only tests check it (failure_test, messages_test), to catch a torn copy. Production readers
-//   skip it: the stamp re-check already rejects torn copies.
-// - The writer computes it on every publish, a few independent multiplies, before the clock read
-//   (see read_ticks_after), so it stays out of the measured hop.
+// - Only tests check it, to catch a torn copy. Production readers skip it: the stamp re-check
+//   already rejects torn copies.
+// - The writer still computes it on every publish: about 26 instructions for a BookDelta, a
+//   serial chain of dependent multiply-adds. It runs before the publish tick is read
+//   (read_ticks_after), so the hop leaves it out, and the saturated-writer benchmark (W-sat)
+//   publishes words encoded beforehand, so that leaves it out too. Only e2e spans it, and even
+//   e2e does not show it: the paced writer publishes inside its due tick (e2e minus hop body
+//   mean 0.03 ns, results/runs.csv).
 // - publish_ticks is written after the checksum, so it is left out (zeroed in the copy), and so
 //   is the checksum field itself.
 // - It is 32 bits, so a changed payload goes unnoticed about once in 2^32: enough for tests.
-// Example (the cases tests/messages_test checks):
-//   payload_checksum(payload, 42) != payload_checksum(payload, 43)  same bytes, different seq
-//   flip any bit of the body or of instrument_id                    -> a different value
-//   change payload.header.publish_ticks                             -> the same value
 template <std::size_t WordCount>
 std::uint32_t payload_checksum(const Payload<WordCount>& payload, std::uint64_t seq) {
-  constexpr unsigned kHalfWordBits = 32;  // a 64-bit word folds into the 32-bit checksum field
-
   Payload<WordCount> copy = payload;
   copy.header.publish_ticks = 0;
   copy.header.checksum = 0;
   std::array<std::uint64_t, WordCount> words;
   std::memcpy(words.data(), &copy, sizeof words);
 
-  // Each word gets its own odd multiplier (kChecksumMultiplier + 2, + 4, ...), so swapping two
-  // words changes the sum.
-  std::uint64_t hash = seq * kChecksumMultiplier;
+  // Each word gets its own odd multiplier (kGoldenRatioMultiplier + 2, + 4, ...), so swapping
+  // two words changes the sum.
+  std::uint64_t hash = seq * kGoldenRatioMultiplier;
   for (std::size_t i = 0; i < WordCount; ++i)
-    hash += words[i] * (kChecksumMultiplier + 2 * (i + 1));
+    hash += words[i] * (kGoldenRatioMultiplier + 2 * (i + 1));
   hash ^= hash >> kChecksumMixShift;
-  hash *= kChecksumMultiplier;
-  return static_cast<std::uint32_t>(hash ^ (hash >> kHalfWordBits));
+  hash *= kGoldenRatioMultiplier;
+  return static_cast<std::uint32_t>(hash ^ (hash >> 32));
 }
 
 }  // namespace mdbus

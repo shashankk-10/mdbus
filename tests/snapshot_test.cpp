@@ -1,10 +1,12 @@
 // The snapshot table's seqlock on one thread.
 // - Reads return NeverWritten before the first write, then exactly the latest snapshot.
+// - A write that lands during the copy makes the reader retry, and the retry returns the newer
+//   snapshot whole.
 // - A writer stopped inside a write (simulated by leaving the version odd) makes the reader retry
 //   up to its cap and report GaveUp, never hand out the half-written record.
 // - A failure means a recovering consumer could start from a torn or stale book.
 
-#include "mdbus/bus_layout.hpp"
+#include "mdbus/segment_format.hpp"
 #include "mdbus/snapshot_table.hpp"
 #include "test_harness.hpp"
 #include "test_helpers.hpp"
@@ -36,6 +38,21 @@ TEST(seqlock_basic) {
   CHECK(snapshot_table.read(2, out).status == SnapshotReadStatus::NeverWritten);
 }
 
+// A write lands while the reader copies version 2: the re-check sees version 4, so the copy is
+// thrown away and one retry returns the new snapshot whole.
+// Would catch a read that keeps the copy it took while a write was landing.
+TEST(write_during_copy_is_retried) {
+  SnapshotRecord<WriteDuringCopy> records[kInstrumentCount]{};
+  SnapshotTable<WriteDuringCopy> snapshot_table(records);
+  snapshot_table.write(1, make_test_snapshot(1, 7));
+  WriteDuringCopy::hook = [&] { snapshot_table.write(1, make_test_snapshot(1, 8)); };
+  InstrumentSnapshot out;
+  const SnapshotReadResult read_result = snapshot_table.read(1, out);
+  CHECK(read_result.status == SnapshotReadStatus::Ok && read_result.retries == 1);
+  CHECK(snapshots_equal(out, make_test_snapshot(1, 8)));
+  CHECK(!WriteDuringCopy::hook);  // it ran
+}
+
 // An odd version that never turns even: the read gives up after exactly kRetryCap retries.
 // Would catch a reader that spins forever on a dead writer, or accepts an odd version.
 TEST(seqlock_writer_stopped_mid_update) {
@@ -50,8 +67,4 @@ TEST(seqlock_writer_stopped_mid_update) {
   const SnapshotReadResult read_result = snapshot_table.read(0, out, kRetryCap);
   CHECK(read_result.status == SnapshotReadStatus::GaveUp);
   CHECK(read_result.retries == kRetryCap);
-}
-
-int main(int argc, char** argv) {
-  return mdbus_test::run_main(argc, argv);
 }
