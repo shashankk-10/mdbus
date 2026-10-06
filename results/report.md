@@ -2,6 +2,8 @@
 
 Campaign: M1 Pro (8 P-cores in two clusters + 2 E-cores), macOS 15.6, Apple clang 15, -O2, commit 7c95cde, 2026-10-06
 
+Measured at 7c95cde; library and bench code are identical to e7022a6 except comments.
+
 Runs: 216 (215 valid). Comparisons: 18.
 
 ## Comparisons (B - A over counterbalanced pairs)

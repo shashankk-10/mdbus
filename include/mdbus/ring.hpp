@@ -132,8 +132,8 @@ class RingReader {
   // - Lapped: the slot already holds a later message, or changed while we copied (a torn copy).
   //   Never retried: the slot only changes again for seq + slot count, so seq is gone.
   // - Why poll the slot and not a global head: one line moves per message instead of two in
-  //   series. Measured: polling a head costs 33% more per hop (DESIGN.md §8.3, "Poll a
-  //   global head instead of the slot stamp": 91.3 -> 121.0 ns).
+  //   series. Measured: polling a head costs 33% more per hop (DESIGN.md §7, "Poll the
+  //   slot stamp, not a global counter": 91.3 -> 121.0 ns).
   // Example (16384 slots, so seq 41 lives in slot 41):
   //   stamp 84 before and after the copy  -> Ok
   //   stamp 83 (writing seq 41) or 0      -> NotWrittenYet

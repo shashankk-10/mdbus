@@ -37,6 +37,9 @@ decisions:
   - {id: Mutex-Base-e2e, a: Mutex, b: Base, args: *fanout, metric: e2e_p99, noise: AA-e2e-p99,
      predict: {lo: -51, hi: -34}, threshold: 1,
      basis: "Mutex p99 1.5-2.2 us (36-53 ticks) measured on the mutex probe; Base p99 2 ticks, one line transfer"}
+  # 2026-10-04: since this prediction Base's publish is inlined and lost the park check (one
+  # load and one branch per publish), so Base costs less than the basis quotes. Quote absolute
+  # W-sat numbers from the new campaign only.
   - {id: Mutex-Base-wsat, a: Mutex, b: Base, args: *wsat, metric: wsat_ns, noise: AA-wsat,
      predict: {lo: -58, hi: -42}, threshold: 1,
      basis: "Mutex 84-97 ns per publish with one polling reader; Base about 125 cycles (39-42 ns) with one P reader"}
@@ -56,6 +59,9 @@ decisions:
      basis: "hop probe: one 64 B granule 58-60 ns, a payload spanning two 91-96 ns"}
   # The prediction is the design claim under test: a wait-free writer isolates fast readers
   # from slow ones.
+  # Added after a pre-campaign smoke run (2 runs each) showed the fast reader's hop at about 74 ns
+  # alone and about 205 ns with the slow E-core reader present. The prediction is the original
+  # design claim under test, that a wait-free writer isolates fast readers from slow ones.
   - {id: Iso-slowE, a: Base, b: Base, args: [--rate, "1000000"], args_a: [--slow, "off"], args_b: [--slow, "read"],
      metric: hop_mean_body_ns, noise: AA-hop, predict: {lo: -2, hi: 2}, threshold: 1,
      basis: "design claim: readers never block the writer, so a slow reader should not move the fast one"}
@@ -69,6 +75,10 @@ decisions:
   # The feed ladder (in-process replay, 16K live orders: the order table fits in L2). F0-F1 also
   # removes a malloc/free per level created or emptied, and F1-F2 one per order added and
   # removed.
+  # 2026-10-04: steps redefined twice. When the pmr pool was cut, map and hash nodes moved to the
+  # global heap. The F0-F1 and F1-F2 predictions below describe the pooled steps: report their
+  # re-run as redefined steps, not as tests of these predictions. The message-on-heap step was
+  # then dropped and the ladder renumbered: old F1..F5 are now F0..F4.
   - {id: F0-F1, a: F0, b: F1, args: [], metric: ns_per_event, noise: AA-feed,
      predict: {lo: -30, hi: -5}, threshold: {rel: 0.03},
      basis: "std::map depth about 6 at 50 levels: about 18 cycles in L1, 100 in L2, against an O(1) ladder and bitmap"}

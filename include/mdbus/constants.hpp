@@ -29,8 +29,8 @@ constexpr std::size_t kCacheLineBytes = 128;
 // 64 B: the unit one core's L1 pulls in at a time.
 // - A slot keeps its stamp + 7 payload words inside one 64 B unit, so a reader moves one unit
 //   per message.
-// - Measured: a payload spread over two units costs about 48% more per hop (DESIGN.md §8.3,
-//   "Payload in one 64 B line vs two", the Copy15 variant: 86.9 -> 128.9 ns).
+// - Measured: a payload spread over two units costs about 48% more per hop (DESIGN.md §7,
+//   "One 64 B unit per message", the Copy15 variant: 86.9 -> 128.9 ns).
 constexpr std::size_t kL1LineBytes = 64;
 
 constexpr std::size_t kWordBytes = sizeof(std::uint64_t);  // every shared field is one 8 B word

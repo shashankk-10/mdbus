@@ -111,6 +111,7 @@ std::string top_of_book_text(const CountingConsumer& consumer, std::uint64_t ins
 
   std::string text = "bid " + best_level_text(snapshot.bids[0], snapshot.bid_count);
   text += " | ask " + best_level_text(snapshot.asks[0], snapshot.ask_count);
+  if ((snapshot.instrument_flags & kInstrumentBad) != 0) text += "  BAD";
   if ((snapshot.instrument_flags & kInstrumentSuspect) != 0) text += "  SUSPECT";
   return text;
 }

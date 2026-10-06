@@ -106,7 +106,7 @@ struct InstrumentRecovery {
 
 // The CRTP base: Derived passes itself as the first template argument.
 // - The base calls derived().on(message, info) directly, so every handler inlines. Why not
-//   virtual: measured, a virtual handler costs 9.9 more instructions per message (DESIGN.md §8.3).
+//   virtual: measured, a virtual handler costs 9.9 more instructions per message (DESIGN.md §7).
 // - A missing on() is a compile error; one for a type Derived ignores is an empty one-liner.
 // - WaitPolicy: SpinWait (the fast reader) or SleepWait (a viewer), above.
 template <class Derived, class WaitPolicy = SpinWait, class Layout = BusLayout<>>
