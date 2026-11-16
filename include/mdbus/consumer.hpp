@@ -19,8 +19,8 @@
 //   the snapshot, and s itself is either in it (skipped) or delivered.
 // - Why lazy, not eager (read every snapshot, then resume): a reader pays only for the
 //   instruments it sees, when it sees them, and delivery never stops for a sweep. Eager would
-//   livelock once instrument count x read time exceeded the ring's history: here 1024 x 76 ns
-//   (snap_mean_ns, results/runs.csv) is about 80 us, against 16 ms at 1 M msg/s.
+//   livelock once instrument count x read time exceeded the ring's history: here 1024 x 70 ns
+//   (snap_mean_ns, results/runs.csv) is about 72 us, against 16 ms at 1 M msg/s.
 // - A lap also skips the trades still in the ring behind the head hint. Starting further back
 //   would risk being lapped again at once.
 

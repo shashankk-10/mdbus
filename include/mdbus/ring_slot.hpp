@@ -55,11 +55,10 @@ static_assert(sizeof(Payload<kDefaultPayloadWords>) == 56 &&
 // One cell of the ring.
 // - With the default 7 words, stamp + payload fill the first 64 B L1 unit and the second 64 B is
 //   padding, so two slots never share a 128 B cache line.
-// - Why not 64 B slots: two slots would then share each 128 B line, so a reader on the other
-//   cluster copying slot s would contend with the writer storing s + 1.
-// - Measured: 64 B slots are a little cheaper per publish at saturation, with no resolved
-//   difference at 1 M msg/s. I keep 128 B as a hedge because macOS will not pin a reader to a
-//   cluster (DESIGN.md §7).
+// - Why not 64 B slots: two slots would then share each 128 B line, so a reader copying slot s
+//   would contend with the writer storing s + 1.
+// - Measured with writer and reader on P-cores: 64 B slots cost 7.2 ns more per hop at 1 M
+//   msg/s and 6.1 ns more per publish at saturation (DESIGN.md §7).
 // - SlotBytes 64 exists for that Pad64 variant only.
 template <class Atomics, std::size_t PayloadWordCount = kDefaultPayloadWords,
           std::size_t SlotBytes = kCacheLineBytes>
@@ -87,7 +86,7 @@ constexpr unsigned kChecksumMixShift = 29;
 //   (read_ticks_after), so the hop leaves it out, and the saturated-writer benchmark (W-sat)
 //   publishes words encoded beforehand, so that leaves it out too. Only e2e spans it, and even
 //   e2e does not show it: the paced writer publishes inside its due tick (e2e minus hop body
-//   mean 0.03 ns, results/runs.csv).
+//   mean -0.12 ns, results/runs.csv).
 // - publish_ticks is written after the checksum, so it is left out (zeroed in the copy), and so
 //   is the checksum field itself.
 // - It is 32 bits, so a changed payload goes unnoticed about once in 2^32: enough for tests.

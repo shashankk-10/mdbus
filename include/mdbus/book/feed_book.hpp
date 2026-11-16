@@ -58,9 +58,9 @@ struct FinalBookConfig {
   using OrderIndexPolicy = OrderTable;
   using LookupPolicy = InstrumentLookupById;
   // While applying event i of a batch, prefetch the order-table entry of event i + 4.
-  // - Measured: -37% per event at 1 M live orders, a table far bigger than L2 (2^21 entries x
-  //   24 B = 48 MiB; 100.0 -> 62.8 ns), and -3.0% at the default 16 K, inside L2 (6/6 pairs,
-  //   just under the 3% threshold: unresolved). 4 was picked, not swept.
+  // - Measured: -33% per event at 1 M live orders, a table far bigger than L2 (2^21 entries x
+  //   24 B = 48 MiB; 108.6 ns, -36.2 ns), and -1.6% at the default 16 K, inside L2 (4 of 6
+  //   pairs agree: unresolved). 4 was picked, not swept.
   // - The feed handler's batch is one packet, at most 10 events, so events 0..3 of each packet
   //   are never prefetched (feed_bench's batches are 1365 events).
   static constexpr std::size_t kPrefetchEventsAhead = 4;

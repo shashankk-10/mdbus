@@ -37,9 +37,8 @@ inline std::uint64_t read_ticks() {
 // - The compiler may move register arithmetic (the checksum) past a plain read_ticks(): the
 //   volatile asm stays ordered against memory accesses, not against arithmetic. Passing the
 //   checksum in as an input forces it to be computed first.
-// - Seen in the disassembly (Apple clang 15): with a plain read_ticks() in write_publish_ticks,
-//   the checksum's last multiply and xor are scheduled after the counter read, inside the timed
-//   window.
+// - With a plain read_ticks() in write_publish_ticks, the compiler is free to schedule the
+//   checksum's last multiply and xor after the counter read, inside the timed window.
 inline std::uint64_t read_ticks_after(std::uint64_t must_be_computed_first) {
   std::uint64_t ticks;
   asm volatile("isb\n mrs %0, cntvct_el0" : "=r"(ticks) : "r"(must_be_computed_first) : "memory");

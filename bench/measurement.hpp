@@ -134,10 +134,11 @@ class LatencyHistogram {
 // Process counters.
 
 // One reading of this process's cycle, instruction, CPU time and page-fault counters.
-// - From proc_pid_rusage V6: public, no root needed, but about 1 us and 8,200 instructions a call
-//   (measured on an M1 Pro), so read only around windows and around batches of 1e4 operations
-//   or more. A batch's instruction count includes about one call: +0.5 per W-sat publish or
-//   dispatched message, about +6 per feed event (1365 events per chunk).
+// - From proc_pid_rusage V6: public, no root needed, but about 0.4 us and 5,300 instructions a
+//   call (measured on the M1 of results/report.md), so read only around windows and around
+//   batches of 1e4 operations or more. A batch's instruction count includes about one call:
+//   +0.3 per W-sat publish or dispatched message (16,384 per batch), about +4 per feed event
+//   (1365 events per chunk).
 // - Each role is a process with one hot thread, so process totals are that thread's.
 // - CPU times are counter ticks on arm64, not ns.
 struct ProcessCounters {

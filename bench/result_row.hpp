@@ -28,8 +28,9 @@ namespace mdbus::bench {
 // The CPU gates judge a run by what it measured, not by machine settings that might matter.
 // - A P-core role whose effective clock (cycles / on-CPU time) fell below kMinPCoreGhz was
 //   throttled, whatever the cause (heat, Low Power Mode, the power source).
-// - On this M1 the P-cores measured just over 3 GHz with one core busy and a little lower with
-//   four, so 2.8 GHz leaves room for four busy roles and still catches throttling.
+// - On the M1 of results/report.md the P-cores measured about 3.13 GHz with one core busy and
+//   about 3.07 with two, so 2.8 GHz leaves room for several busy roles and still catches
+//   throttling.
 // - A P-core role must also have spent at least kMinPCoreShare of its cycles on the P-cores.
 constexpr double kMinPCoreGhz = 2.8;
 constexpr double kMinPCoreShare = 0.99;

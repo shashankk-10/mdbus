@@ -54,13 +54,14 @@ constexpr bool kThreadSanitizer = false;
 // slot is contended. Both keep the production 128 B slot.
 // - SevenWordLayout: the production payload, so stamp + payload sit in the first 64 B half.
 // - FifteenWordLayout: the Copy15 shape, stamp + payload across both 64 B halves.
-// - Why both: on the M1 Pro measured below, the writer's stores inside one 64 B half were never
+// - Why both: on the M1 measured below, the writer's stores inside one 64 B half were never
 //   seen out of order, so in the 7-word ring the writer-side mutants tore no copy, and were
 //   caught only through the snapshot record (8 B version + 120 B, across both halves). In the
 //   15-word ring they tear ring copies too, so the ring writer's fence and release store are
 //   under test.
-// - Measured on an M1 Pro, 10 runs: under the two writer-side mutants the 7-word ring tore 0 of
-//   about 330 M copies and the 15-word ring about 7,100 of 240 M.
+// - Measured on the M1 of results/report.md, 3 runs (results/mutant_stress.txt): under the two
+//   writer-side mutants the 7-word ring showed no bad copy, and the 15-word ring 149 to 609 per
+//   mutant per run with the readers on P-cores.
 using SevenWordLayout = BusLayout<DefaultSchema, 64>;
 using FifteenWordLayout = BusLayout<DefaultSchema, 64, 15, kCacheLineBytes>;
 constexpr std::uint16_t kInstrumentCount = 2;
@@ -347,9 +348,9 @@ void print_legend_and_header(std::uint64_t ms) {
       "slot (stamp + payload in one 64 B half), 15w the Copy15 shape (across both halves); P and\n"
       "E put the readers on P or E cores. A cell shows bad ring / bad snapshot copies, and one\n"
       "kills a mutant. Checked: millions of copies (ring / snapshot). Gave up: snapshot reads\n"
-      "that hit the retry cap. On the M1 Pro this was written on, the 7w ring never showed a\n"
-      "writer-side reordering (0 of about 330 M copies in 10 runs), so those mutants died there\n"
-      "only through the snapshot record; 15w lets the ring check catch them too.\n\n",
+      "that hit the retry cap. On the M1 of results/report.md, the 7w ring never showed a\n"
+      "writer-side reordering (no bad copy in 3 runs), so those mutants died there only\n"
+      "through the snapshot record; 15w lets the ring check catch them too.\n\n",
       std::to_string(ms).c_str());
   std::printf("%-*s", kLabelWidth, "mutant");
   print_cell_labels<SevenWordLayout>();
