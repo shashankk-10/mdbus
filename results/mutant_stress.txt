@@ -1,0 +1,58 @@
+mutant_stress, three runs at 300 ms per cell, on the machine and commit of report.md.
+=== run 1
+mutant_stress: a writer and 3 reader threads, 300 ms per cell. 7w is the production
+slot (stamp + payload in one 64 B half), 15w the Copy15 shape (across both halves); P and
+E put the readers on P or E cores. A cell shows bad ring / bad snapshot copies, and one
+kills a mutant. Checked: millions of copies (ring / snapshot). Gave up: snapshot reads
+that hit the retry cap. On the M1 Pro this was written on, the 7w ring never showed a
+writer-side reordering (0 of about 330 M copies in 10 runs), so those mutants died there
+only through the snapshot record; 15w lets the ring check catch them too.
+
+mutant                         7w/P        7w/E        15w/P       15w/E       checked       gave up  verdict
+control_unmodified             0/0         0/0         0/0         0/0         29.6/19.7     4076     clean
+writer_no_release_fence        0/23        0/0         609/11      0/0         32.9/16.7     1170     KILLED
+writer_release_stores_relaxed  0/22        0/0         262/72      1/0         30.4/18.6     3306     KILLED
+reader_no_acquire_fence        196/8802    1267/147    171/4368    1122/264    31.3/22.6     1504     KILLED
+reader_acquire_loads_relaxed   58/537      5/5         2/3833      349/13      32.1/21.9     217      KILLED
+reader_skip_recheck            6104/0      8510/0      3046/0      10088/0     31.6/21.6     1122     KILLED
+
+Control clean, 5 of 5 mutants killed: exit 0.
+exit 0
+=== run 2
+mutant_stress: a writer and 3 reader threads, 300 ms per cell. 7w is the production
+slot (stamp + payload in one 64 B half), 15w the Copy15 shape (across both halves); P and
+E put the readers on P or E cores. A cell shows bad ring / bad snapshot copies, and one
+kills a mutant. Checked: millions of copies (ring / snapshot). Gave up: snapshot reads
+that hit the retry cap. On the M1 Pro this was written on, the 7w ring never showed a
+writer-side reordering (0 of about 330 M copies in 10 runs), so those mutants died there
+only through the snapshot record; 15w lets the ring check catch them too.
+
+mutant                         7w/P        7w/E        15w/P       15w/E       checked       gave up  verdict
+control_unmodified             0/0         0/0         0/0         0/0         32.6/22.5     243      clean
+writer_no_release_fence        0/9         0/0         465/40      0/0         27.8/13.2     9558     KILLED
+writer_release_stores_relaxed  0/34        0/0         149/56      0/0         30.6/17.5     1261     KILLED
+reader_no_acquire_fence        218/10111   1203/192    62/4564     1028/270    32.1/24.3     439      KILLED
+reader_acquire_loads_relaxed   229/518     14/16       14/2632     287/14      33.1/21.9     1073     KILLED
+reader_skip_recheck            5106/0      8737/0      4260/0      11032/0     33.5/20.8     707      KILLED
+
+Control clean, 5 of 5 mutants killed: exit 0.
+exit 0
+=== run 3
+mutant_stress: a writer and 3 reader threads, 300 ms per cell. 7w is the production
+slot (stamp + payload in one 64 B half), 15w the Copy15 shape (across both halves); P and
+E put the readers on P or E cores. A cell shows bad ring / bad snapshot copies, and one
+kills a mutant. Checked: millions of copies (ring / snapshot). Gave up: snapshot reads
+that hit the retry cap. On the M1 Pro this was written on, the 7w ring never showed a
+writer-side reordering (0 of about 330 M copies in 10 runs), so those mutants died there
+only through the snapshot record; 15w lets the ring check catch them too.
+
+mutant                         7w/P        7w/E        15w/P       15w/E       checked       gave up  verdict
+control_unmodified             0/0         0/0         0/0         0/0         31.2/22.0     1043     clean
+writer_no_release_fence        0/22        0/0         531/21      0/0         32.8/16.0     1372     KILLED
+writer_release_stores_relaxed  0/57        0/1         349/90      5/0         34.0/21.5     609      KILLED
+reader_no_acquire_fence        298/7756    1274/190    79/5249     1019/248    32.1/24.3     495      KILLED
+reader_acquire_loads_relaxed   62/729      7/19        1/4245      330/12      33.3/23.8     287      KILLED
+reader_skip_recheck            4891/0      8795/0      3152/0      10198/0     33.6/22.2     752      KILLED
+
+Control clean, 5 of 5 mutants killed: exit 0.
+exit 0

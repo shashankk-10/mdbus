@@ -6,8 +6,8 @@ number of reader processes read it without locks, and the writer never waits for
 exchange simulator and an L3 feed handler sit in front, so the path from a UDP datagram to a
 reader's book runs for real.
 
-Measured on an Apple M1 Pro (8 P-cores in two clusters, 2 E-cores), macOS 15.6, Apple clang 15.
-The design, every decision and every measurement: [`DESIGN.md`](DESIGN.md).
+Measured on an Apple M1 MacBook Air (4 P-cores in one cluster, 4 E-cores, 8 GB), macOS 15.6,
+Apple clang 17.0.0. The design, every decision and every measurement: [`DESIGN.md`](DESIGN.md).
 
 ## The pipeline
 
@@ -29,8 +29,9 @@ mdbus_exchange_sim --UDP multicast--> mdbus_feed_handler --shared memory--> read
 - Wait-free publish and poll: a per-slot seqlock whose stamp holds the sequence number, so a
   reader that falls behind detects it exactly.
 - Lazy per-instrument recovery from snapshots after a reader is lapped.
-- Ring hop between two P-cores: 87.8 ns mean (p50 2 ticks of the 24 MHz counter).
-- Order book: 53 ns per event, from 147.5 ns for a `std::map`/`unordered_map` design.
+- Ring hop between two P-cores: 56.4 ns trimmed mean, 107.3 ns mean over all messages (p50 1
+  tick of the 24 MHz counter). The trimmed mean drops samples over 667 ns, 0.24% of them.
+- Order book: 56.8 ns per event, from 165.2 ns for a `std::map`/`unordered_map` design.
 - Memory ordering tested on real cores by mutation: every weakened fence or ordering must be
   caught.
 
@@ -65,7 +66,7 @@ Start with the six files in **bold**, in order: they are the whole bus.
 | `bench/` | `bus_bench.cpp`, `feed_bench.cpp`, `dispatch_bench.cpp`; the workload, timing, measurement, command-line, launcher and result-row helpers; `decisions.yaml` (predictions); `bench_tools_test.py` (tests of the scripts and bench command lines) |
 | `tests/` | Unit tests, the book oracle, end to end over UDP, failure injection with real processes, the mutant stress, two compile-fail tests; shared code in `test_harness.hpp`, `test_main.cpp` (the one `main`) and `test_helpers.hpp` |
 | `scripts/` | `compare.py` (paired comparisons), `report.py` (their tables), `check.sh` (three builds: as is, ASan+UBSan, TSan), `demo.sh` |
-| `results/` | The benchmark campaign: `report.md` (comparisons and per-variant tables), `runs.csv` (every run), `campaign.log` |
+| `results/` | The benchmark campaign: `report.md` (comparisons and per-variant tables), `runs.csv` (every run), `campaign.log`; and `mutant_stress.txt`, three runs of the mutation test |
 
 ## Build, test, run
 
@@ -74,7 +75,7 @@ downloads HdrHistogram once per build directory (offline: add
 `-DFETCHCONTENT_SOURCE_DIR_HDR_HISTOGRAM=DIR` with its unpacked source).
 
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-    ctest --test-dir build -j4      # 33 tests, about 20 s
+    ctest --test-dir build -j4      # 33 tests, about 25 s
     scripts/check.sh                # the same as built, under ASan+UBSan and under TSan
     scripts/demo.sh 10              # live: simulator -> feed handler -> bus -> viewer
 
@@ -83,7 +84,7 @@ Benchmarks:
     ./build/bench/mdbus_bench_Base --duration-ms 3000 --out /tmp/base      # one run
     ./build/bench/mdbus_bench_Base --slow read --out /tmp/slow             # with a slow E-core reader
     python3 scripts/compare.py Copy --out /tmp/copy                       # one paired comparison
-    python3 scripts/compare.py --all --out /tmp/campaign                  # all 18, about 17 min
+    python3 scripts/compare.py --all --out /tmp/campaign                  # all 18, about 27 min
     ./build/mutant_stress                                                 # the mutation test
 
 Each benchmark run writes a `row.csv` and prints a summary: latency (body mean, mean over all
@@ -92,19 +93,23 @@ busy. A bad command line is refused with a reason and exit code 2.
 
 ## Results
 
-Full tables, method and comments: `DESIGN.md` §8; raw data: `results/`.
+Full tables, method and comments: `DESIGN.md` §8; raw data: `results/`. Medians over runs. A
+comparison gives A's median and the median paired difference B - A. The Base hop's median moved
+from 54 to 66 ns between comparisons: each ran at a different time, and the machine was also
+running other work.
 
 | Comparison | Result |
 |---|---|
-| Ring hop, P-core to P-core, 1 M msg/s | 87.8 ns body mean; p50 2 ticks, p99 250 ns |
-| Payload in one 64 B line vs two | 86.9 -> 128.9 ns |
-| Readers poll the slot stamp vs a global head | 91.3 vs 121.0 ns |
-| Slow E-core reader present vs absent | 86.9 -> 219.9 ns (2.5x) |
-| Writer per publish, alone vs one reader | 2.67 -> 26.1 ns (same 45.7 instructions) |
-| Mutex vs ring, e2e p99 with a slow reader | 237 us vs 417 ns |
+| Ring hop, P-core to P-core, 1 M msg/s | 56.4 ns trimmed mean, 107.3 ns full mean; p50 1 tick, p99 125 ns |
+| Payload in one 64 B line vs two | 55.1 ns, two lines +49.3 ns |
+| Readers poll the slot stamp vs a global head | 66.0 ns, a head +41.9 ns (unresolved: 5 of 6 pairs usable) |
+| Slow E-core reader absent vs present | 66.2 ns, present +153 ns (3.3x) |
+| Writer per publish, alone vs one reader | 2.31 ns, one reader +21.8 ns (36.65 instructions either way) |
+| Mutex vs ring, e2e p99 with a slow reader | 123.5 us vs 375 ns |
 | Virtual handler vs CRTP | +9.9 instructions per message |
-| Order book, naive -> final | 147.5 -> 53.0 ns per event |
-| Order-table prefetch, 48 MiB table | -37% per event |
+| 128 B slots vs 64 B slots | 64 B slots +7.2 ns per hop, +6.1 ns per publish at saturation |
+| Order book, naive -> final | 165.2 -> 56.8 ns per event |
+| Order-table prefetch, 48 MiB table | 108.6 ns, prefetch -36.2 ns per event (-33%) |
 
 ## Known limits
 

@@ -7,13 +7,15 @@ Repository: https://github.com/shashankk-10/mdbus
 - Send market data from one writer process to many reader processes on one machine, through
   shared memory (called a "bus").
 - Low latency, no locks. The writer never waits for a reader, though readers do slow it down.
-- C++20 header-only library. Apple Silicon macOS, measured on an M1 Pro.
+- C++20 header-only library. Apple Silicon macOS, measured on an M1 MacBook Air (4 P-cores in
+  one cluster, 4 E-cores, 8 GB), macOS 15.6, Apple clang 17.0.0.
 
 Results in short:
 
-- Writer -> reader: 88 ns average (108 ns counting OS stalls), p99 250 ns, at 1 M msg/s.
-- Order book: 53 ns per event, down from 147.5 ns for a naive version.
-- With a slow reader attached, the fast reader's p99 is 417 ns. Same ring behind a mutex: 237 µs.
+- Writer -> reader: 56 ns trimmed average (107 ns over all messages, OS stalls included), p99
+  125 ns, at 1 M msg/s.
+- Order book: 56.8 ns per event, down from 165.2 ns for a naive version.
+- With a slow reader attached, the fast reader's p99 is 375 ns. Same ring behind a mutex: 124 µs.
 - Lost packet or refused order: affected books are flagged and readers stop updating them.
 
 ## 2. Problem Statements
@@ -160,11 +162,12 @@ The writer never reads anything a reader writes. It doesn't even know how many r
 ## 7. Optimizations
 
 - **CRTP instead of virtual calls:** 9.9 fewer instructions per message.
-- **One 64 B unit per message:** spreading it over two units costs 42 ns more.
-- **Poll the slot stamp, not a global counter:** about 30 ns saved.
-- **128 B slots:** 64 B slots were 1.75 ns cheaper per publish, but two slots then share a
-  cache line and can slow each other. 128 B kept to be safe.
-- **Prefetch 4 events ahead:** -37% with a 48 MiB order table. At the default size it fits in
+- **One 64 B unit per message:** spreading it over two units costs 49 ns more.
+- **Poll the slot stamp, not a global counter:** 42 ns saved (median; 30 to 52 ns over the 5
+  usable pairs, one pair short of a verdict).
+- **128 B slots:** with 64 B slots two slots share a 128 B cache line, and here they cost 7.2 ns
+  more per hop at 1 M msg/s and 6.1 ns more per publish at saturation.
+- **Prefetch 4 events ahead:** -33% with a 48 MiB order table. At the default size it fits in
   cache and gains too little to count.
 
 ## 8. Measurement
@@ -172,7 +175,7 @@ The writer never reads anything a reader writes. It doesn't even know how many r
 ### 8.1 The clock
 
 - CPU counter at 24 MHz (1 tick = 41.67 ns), the same in every process.
-- Latency averages are good to about one tick, so changes that small (30, 42 ns) are rough.
+- Latency averages are good to about one tick, so changes that small (42, 49 ns) are rough.
   Per-publish and per-event costs are timed in batches, so the tick doesn't limit them.
 
 ### 8.2 Method
@@ -182,23 +185,27 @@ The writer never reads anything a reader writes. It doesn't even know how many r
 - A vs B: 6 pairs of runs. A change counts only if all 6 agree and it beats both run-to-run
   noise and a set minimum (1 ns; 1 tick for p99; 3% for the order book). Busy-machine runs are
   redone up to twice, then the pair is dropped.
+- This machine was also running other work, and the gates rejected 92 of 216 runs in the first
+  pass. `compare.py` was run twice more over the same runs, which re-ran only the rejected ones:
+  215 of 216 ended valid (`results/campaign.log`). The A medians of one metric therefore come
+  from different times: the Base hop's median ranges from 54 to 66 ns across comparisons.
 
 ### 8.3 Results
 
 | What | Result |
 |---|---|
-| Writer -> reader at 1 M msg/s | Average 88 ns (108 ns with OS stalls), p99 250 ns, p99.9 6.5 µs, max 52 µs in a typical run, 1.3 ms worst |
-| Writer cost per publish | 2.67 ns alone, 26.1 ns with one reader (same work, 9x the cycles: most likely cache traffic) |
-| Max rate with one reader | About 38 M msg/s (fast reader lapped in 8 of 30 runs, under 0.03% lost) |
-| Fast reader, slow reader added | 87 -> 220 ns (2.5x slower) |
-| Mutex vs ring, slow reader, 1 M msg/s | p99 237 µs vs 417 ns. Mutex writer behind schedule on 76% of publishes (ring 0.1%) |
-| Mutex vs ring, flat out | Same writer cost (25.7 vs 26.1 ns), but the mutex reader lost about 76% of messages (same %, by chance) |
-| Order book, naive -> final | 147.5 -> 52.9 ns per event (price array -30 ns, hash table -56 to -64 ns, id instead of symbol -7 ns) |
+| Writer -> reader at 1 M msg/s | Trimmed average 56 ns (107 ns over all messages), p99 125 ns, p99.9 9.1 µs, max 256 µs in a typical run, 9.2 ms worst |
+| Writer cost per publish | 2.31 ns alone, 24.4 ns with one reader (same 36.65 instructions, about 10x the time: most likely cache traffic) |
+| Max rate with one reader | About 44 M msg/s. The fast reader was lapped in 26 of 30 runs and lost a median 0.16% of messages, 10% at worst |
+| Fast reader, slow reader added | 66 -> 219 ns (3.3x slower) |
+| Mutex vs ring, slow reader, 1 M msg/s | p99 124 µs vs 375 ns. Mutex writer behind schedule on 71% of publishes (ring 0.1%) |
+| Mutex vs ring, flat out | Mutex 29.3 ns per publish, ring 3.7 ns less (5 of 6 pairs usable: unresolved). The mutex reader lost about 61% of messages |
+| Order book, naive -> final | 165.2 -> 56.8 ns per event (price array -34 ns, hash table -61 ns, id instead of symbol -6.4 ns) |
 
 - Medians over runs. Slow reader: efficiency core, 500 ns of work per message, busy-waits
-  between messages, lapped 1-4 times in 21 of 24 runs.
-- p99.9 and max are most likely OS stalls. Same build: back-to-back runs differ by up to 8 ns,
-  all 36 runs span 85-102 ns.
+  between messages, lapped 1-3 times in 6 of 24 runs.
+- p99.9 and max are most likely OS stalls. Same build: back-to-back runs differ by up to 3.8 ns,
+  all 36 runs span 53-76 ns.
 
 ### 8.4 How correctness was validated
 
@@ -210,16 +217,16 @@ The writer never reads anything a reader writes. It doesn't even know how many r
 
 ### 8.5 How hypotheses were validated
 
-- Expected ranges were written down before the runs and never changed: 7 of 14 hit. Caveats:
+- Expected ranges were written down before the runs and never changed: 5 of 14 hit. Caveats:
   three were written for older code, and four are narrower than one tick.
-- Key miss: the design claim that a slow reader costs the fast one nothing. It was kept as the
-  prediction even though a 2-run early test had shown 74 -> 205 ns. Result: 2.5x slower.
+- Key miss: the design claim that a slow reader costs the fast one nothing. Result: 3.3x slower.
+- Also missed: 64 B slots were predicted to cost nothing on P-cores. Here they cost 6 to 7 ns.
 
 ## 9. Known Limitations
 
 - **One lost packet stops book updates** for the rest of the run (no gap recovery). Same after a
   malformed packet or a writer restart.
-- **Readers slow each other:** a slow reader takes the fast one from 87 to 220 ns, and one
+- **Readers slow each other:** a slow reader takes the fast one from 66 to 219 ns, and one
   reader makes the writer ~10x slower. Only 1 fast + 1 slow reader measured so far.
 - **Fail closed covers books only.** After a gap some trades go missing, unmarked. An exchange
   restart isn't detected: its packets are dropped as old, then applied to the old book unflagged.

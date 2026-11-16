@@ -1,5 +1,6 @@
-Mon Oct  5 23:49:54 IST 2026
-commit 7c95cde1da5125035d7f4853023ee4c7489bc356
+Mon Nov 16 17:07:41 IST 2026
+commit a53b16497b8c05badf09d05b903cbce11193946b
+Apple M1 (MacBookAir10,1), macOS 15.6, Apple clang version 17.0.0 (clang-1700.6.3.2)
 18 comparisons, 6 pairs each, about 27 min
   AA-hop           Base     -> Base       hop_mean_body_ns
   AA-e2e-p99       Base     -> Base       e2e_p99
@@ -20,19 +21,29 @@ commit 7c95cde1da5125035d7f4853023ee4c7489bc356
   F3-F4            F3       -> F4         ns_per_event
   F3-F4-32MB       F3       -> F4         ns_per_event
 AA-hop: Base -> Base on hop_mean_body_ns
-  pair 0 A Base       rc=0 attempt 1
+  pair 0 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 0 A Base       rc=0 attempt 2
   pair 0 B Base       rc=0 attempt 1
   pair 1 B Base       rc=0 attempt 1
   pair 1 A Base       rc=0 attempt 1
-  pair 2 A Base       rc=0 attempt 1
-  pair 2 B Base       rc=0 attempt 1
-  pair 3 B Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: minflt_fast
+  pair 2 A Base       rc=0 attempt 3 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 2 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 2 B Base       rc=0 attempt 2 gates failed: minflt_fast|pshare_fast
+  pair 2 B Base       rc=0 attempt 3 gates failed: minflt_fast
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer
+  pair 3 B Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 3 B Base       rc=0 attempt 3 gates failed: pshare_writer
   pair 3 A Base       rc=0 attempt 1
   pair 4 A Base       rc=0 attempt 1
   pair 4 B Base       rc=0 attempt 1
   pair 5 B Base       rc=0 attempt 1
-  pair 5 A Base       rc=0 attempt 1
-  AA-hop           unresolved    hop_mean_body_ns: median -2.1, range [-8, 6.3], 4/6 agree, predicted [-1, 1] miss
+  pair 5 A Base       rc=0 attempt 1 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 5 A Base       rc=0 attempt 3 gates failed: pshare_writer|pshare_fast
+  AA-hop           unresolved    hop_mean_body_ns: median -1.55, range [-1.97, 0.404], 2/3 agree, predicted [-1, 1] miss
+  only 3 of 6 pairs usable: B better or B worse needs at least 6
 AA-e2e-p99: Base -> Base on e2e_p99
   pair 0 A Base       rc=0 attempt 1
   pair 0 B Base       rc=0 attempt 1
@@ -41,27 +52,30 @@ AA-e2e-p99: Base -> Base on e2e_p99
   pair 2 A Base       rc=0 attempt 1
   pair 2 B Base       rc=0 attempt 1
   pair 3 B Base       rc=0 attempt 1
-  pair 3 A Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 3 A Base       rc=0 attempt 2 gates failed: minflt_writer|minflt_slow
+  pair 3 A Base       rc=0 attempt 3
   pair 4 A Base       rc=0 attempt 1
   pair 4 B Base       rc=0 attempt 1
   pair 5 B Base       rc=0 attempt 1
   pair 5 A Base       rc=0 attempt 1
-  AA-e2e-p99       unresolved    e2e_p99: median +0, range [0, 3.82e+05], 1/6 agree, predicted [-1, 1] hit
+  AA-e2e-p99       unresolved    e2e_p99: median +0, range [0, 1.02e+03], 1/6 agree, predicted [-1, 1] hit
 AA-wsat: Base -> Base on wsat_ns
   pair 0 A Base       rc=0 attempt 1
   pair 0 B Base       rc=0 attempt 1
   pair 1 B Base       rc=0 attempt 1
-  pair 1 A Base       rc=0 attempt 1
-  pair 2 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
-  pair 2 A Base       rc=0 attempt 2
+  pair 1 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 1 A Base       rc=0 attempt 2
+  pair 2 A Base       rc=0 attempt 1
   pair 2 B Base       rc=0 attempt 1
   pair 3 B Base       rc=0 attempt 1
   pair 3 A Base       rc=0 attempt 1
   pair 4 A Base       rc=0 attempt 1
-  pair 4 B Base       rc=0 attempt 1
+  pair 4 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 4 B Base       rc=0 attempt 2
   pair 5 B Base       rc=0 attempt 1
   pair 5 A Base       rc=0 attempt 1
-  AA-wsat          no difference wsat_ns: median +0.0699, range [-0.234, 0.186], 4/6 agree, predicted [-1, 1] hit
+  AA-wsat          unresolved    wsat_ns: median +0.0775, range [-0.605, 1.61], 3/6 agree, predicted [-1, 1] hit
 AA-feed: F4 -> F4 on ns_per_event
   pair 0 A F4         rc=0 attempt 1
   pair 0 B F4         rc=0 attempt 1
@@ -75,66 +89,553 @@ AA-feed: F4 -> F4 on ns_per_event
   pair 4 B F4         rc=0 attempt 1
   pair 5 B F4         rc=0 attempt 1
   pair 5 A F4         rc=0 attempt 1
-  AA-feed          no difference ns_per_event: median +0.0305, range [-0.397, 0.275], 4/6 agree, predicted [-1.06, 1.06] hit
+  AA-feed          no difference ns_per_event: median -0.122, range [-0.397, 0.214], 4/6 agree, predicted [-1.13, 1.13] hit
 Mutex-Base-e2e: Mutex -> Base on e2e_p99
-  pair 0 A Mutex      rc=0 attempt 1 gates failed: fast_laps
-  pair 0 A Mutex      rc=0 attempt 2
+  pair 0 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 0 A Mutex      rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast|minflt_slow|fast_laps
+  pair 0 A Mutex      rc=0 attempt 3
   pair 0 B Base       rc=0 attempt 1
   pair 1 B Base       rc=0 attempt 1
   pair 1 A Mutex      rc=0 attempt 1
-  pair 2 A Mutex      rc=0 attempt 1
-  pair 2 B Base       rc=0 attempt 1
+  pair 2 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 2 A Mutex      rc=0 attempt 2
+  pair 2 B Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 2 B Base       rc=0 attempt 2 gates failed: minflt_writer|minflt_slow
+  pair 2 B Base       rc=0 attempt 3 gates failed: minflt_slow
   pair 3 B Base       rc=0 attempt 1
-  pair 3 A Mutex      rc=0 attempt 1
+  pair 3 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|pshare_fast|fast_laps
+  pair 3 A Mutex      rc=0 attempt 2
   pair 4 A Mutex      rc=0 attempt 1
   pair 4 B Base       rc=0 attempt 1
   pair 5 B Base       rc=0 attempt 1
   pair 5 A Mutex      rc=0 attempt 1
-  Mutex-Base-e2e   B better      e2e_p99: median -5.68e+03, range [-6.61e+03, -5.55e+03], 6/6 agree, predicted [-51, -34] miss
+  Mutex-Base-e2e   unresolved    e2e_p99: median -2.99e+03, range [-3.57e+03, -2.58e+03], 5/5 agree, predicted [-51, -34] miss
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
 Mutex-Base-wsat: Mutex -> Base on wsat_ns
-  pair 0 A Mutex      rc=0 attempt 1
-  pair 0 B Base       rc=0 attempt 1
-  pair 1 B Base       rc=0 attempt 1
-  pair 1 A Mutex      rc=0 attempt 1
-  pair 2 A Mutex      rc=0 attempt 1
-  pair 2 B Base       rc=0 attempt 1
-  pair 3 B Base       rc=0 attempt 1
-  pair 3 A Mutex      rc=0 attempt 1
-  pair 4 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
-  pair 4 A Mutex      rc=0 attempt 2
-  pair 4 B Base       rc=0 attempt 1
+  pair 0 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 0 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 0 A Mutex      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|pshare_fast|ghz_fast
+  pair 0 B Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 0 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 0 B Base       rc=0 attempt 3
+  pair 1 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 B Base       rc=0 attempt 3 gates failed: pshare_writer|pshare_fast
+  pair 1 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 A Mutex      rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 A Mutex      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Mutex      rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 2 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Mutex      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 B Base       rc=0 attempt 2 gates failed: pshare_fast
+  pair 2 B Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 3 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 3 B Base       rc=0 attempt 3
+  pair 3 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 A Mutex      rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|minflt_fast|ghz_fast
+  pair 4 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 A Mutex      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 B Base       rc=0 attempt 1 gates failed: minflt_writer|minflt_fast
+  pair 4 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 4 B Base       rc=0 attempt 3 gates failed: pshare_writer|pshare_fast
   pair 5 B Base       rc=0 attempt 1
-  pair 5 A Mutex      rc=0 attempt 1
-  Mutex-Base-wsat  no difference wsat_ns: median +0.518, range [-0.758, 0.936], 5/6 agree, predicted [-58, -42] miss
+  pair 5 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 5 A Mutex      rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  Mutex-Base-wsat  unresolved    wsat_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
 Writer-alone: Base -> Base on wsat_ns
-  pair 0 A Base       rc=0 attempt 1
-  pair 0 B Base       rc=0 attempt 1
-  pair 1 B Base       rc=0 attempt 1
-  pair 1 A Base       rc=0 attempt 1 gates failed: pshare_writer
-  pair 1 A Base       rc=0 attempt 2
-  pair 2 A Base       rc=0 attempt 1
-  pair 2 B Base       rc=0 attempt 1
-  pair 3 B Base       rc=0 attempt 1
-  pair 3 A Base       rc=0 attempt 1
-  pair 4 A Base       rc=0 attempt 1
-  pair 4 B Base       rc=0 attempt 1
-  pair 5 B Base       rc=0 attempt 1
-  pair 5 A Base       rc=0 attempt 1
-  Writer-alone     B worse       wsat_ns: median +23.4, range [23.3, 23.6], 6/6 agree, predicted [15, 25] hit
+  pair 0 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 0 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 0 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 0 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 0 B Base       rc=0 attempt 2
+  pair 1 B Base       rc=0 attempt 1 gates failed: minflt_writer
+  pair 1 B Base       rc=0 attempt 2 gates failed: minflt_writer
+  pair 1 B Base       rc=0 attempt 3 gates failed: minflt_writer
+  pair 1 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 1 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 1 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 2 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 2 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 2 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 2 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 2 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 2 B Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 B Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 3 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 3 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 4 A Base       rc=0 attempt 1 gates failed: minflt_writer|ghz_writer
+  pair 4 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 4 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 4 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 4 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 B Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 B Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 5 B Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 1 gates failed: minflt_writer|ghz_writer
+  pair 5 A Base       rc=0 attempt 2 gates failed: minflt_writer|ghz_writer
+  pair 5 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  Writer-alone     unresolved    wsat_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
 Pad-pp: Base -> Pad64 on hop_mean_body_ns
-  pair 0 A Base       rc=0 attempt 1
+  pair 0 A Base       rc=0 attempt 1 gates failed: pshare_writer|minflt_fast|pshare_fast|fast_laps
+  pair 0 A Base       rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 0 A Base       rc=0 attempt 3 gates failed: pshare_writer|minflt_fast|pshare_fast
   pair 0 B Pad64      rc=0 attempt 1
-  pair 1 B Pad64      rc=0 attempt 1
+  pair 1 B Pad64      rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 B Pad64      rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 1 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 2 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 2 B Pad64      rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 2 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 3 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer
+  pair 3 B Pad64      rc=0 attempt 2
+  pair 3 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|ghz_fast
+  pair 4 A Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 4 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 B Pad64      rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 B Pad64      rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast|fast_laps
+  pair 4 B Pad64      rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 5 B Pad64      rc=0 attempt 1
+  pair 5 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast|fast_laps
+  pair 5 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|ghz_fast
+  Pad-pp           unresolved    hop_mean_body_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+Pad-wsat: Base -> Pad64 on wsat_ns
+  pair 0 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 0 A Base       rc=0 attempt 2 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 0 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 0 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 B Pad64      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Pad64      rc=0 attempt 2 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 1 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 1 A Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 1 A Base       rc=0 attempt 2 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 1 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 2 A Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|minflt_fast|ghz_fast
+  pair 2 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 B Pad64      rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 2 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 B Pad64      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 3 A Base       rc=0 attempt 1 gates failed: minflt_writer
+  pair 3 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 4 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 4 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 4 B Pad64      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 B Pad64      rc=0 attempt 3
+  pair 5 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|pshare_fast
+  pair 5 B Pad64      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 B Pad64      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  Pad-wsat         unresolved    wsat_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+Copy: Base -> Copy15 on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 B Copy15     rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 B Copy15     rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 B Copy15     rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 B Copy15     rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 1 B Copy15     rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Copy15     rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 B Copy15     rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 B Copy15     rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 B Copy15     rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 B Copy15     rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 3 B Copy15     rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 B Copy15     rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 3 A Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 3 A Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 3 A Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 4 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 4 B Copy15     rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 4 B Copy15     rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 4 B Copy15     rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 5 B Copy15     rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 5 B Copy15     rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 5 B Copy15     rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 5 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 3 gates failed: ghz_writer|minflt_fast|ghz_fast
+  Copy             unresolved    hop_mean_body_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+Iso-slowE: Base -> Base on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast|fast_laps
+  pair 0 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 0 B Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|minflt_slow
+  pair 0 B Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast|minflt_slow
+  pair 0 B Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|minflt_slow
+  pair 1 B Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 2 B Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast|fast_laps
+  pair 2 B Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast|fast_laps
+  pair 2 B Base       rc=0 attempt 3 gates failed: ghz_writer|minflt_fast|ghz_fast
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|minflt_slow
+  pair 3 B Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 3 B Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 3 A Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 3 A Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 3 A Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 4 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|ghz_fast
+  pair 4 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 4 B Base       rc=0 attempt 1 gates failed: ghz_writer|minflt_fast|ghz_fast
+  pair 4 B Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 4 B Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|minflt_slow
+  pair 5 B Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 5 B Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|minflt_slow
+  pair 5 B Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 5 A Base       rc=0 attempt 1 gates failed: ghz_writer|minflt_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 5 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  Iso-slowE        unresolved    hop_mean_body_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+HeadPoll: Base -> HeadPoll on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 A Base       rc=0 attempt 2 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 0 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 0 B HeadPoll   rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 0 B HeadPoll   rc=0 attempt 2 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 0 B HeadPoll   rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast
+  pair 1 B HeadPoll   rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer|minflt_fast|pshare_fast|ghz_fast|fast_laps
+  pair 1 B HeadPoll   rc=0 attempt 2 gates failed: pshare_writer|pshare_fast|fast_laps
+  pair 1 B HeadPoll   rc=0 attempt 3
+  pair 1 A Base       rc=0 attempt 1 gates failed: minflt_fast
+  pair 1 A Base       rc=0 attempt 2 gates failed: ghz_writer|minflt_fast|ghz_fast
+  pair 1 A Base       rc=0 attempt 3
+  pair 2 A Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 2 A Base       rc=0 attempt 3 gates failed: pshare_writer|pshare_fast
+  pair 2 B HeadPoll   rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 2 B HeadPoll   rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 2 B HeadPoll   rc=0 attempt 3 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 3 B HeadPoll   rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 3 B HeadPoll   rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 3 B HeadPoll   rc=0 attempt 3 gates failed: minflt_writer|minflt_fast
+  pair 3 A Base       rc=0 attempt 1 gates failed: pshare_writer|minflt_fast|pshare_fast|fast_laps
+  pair 3 A Base       rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 3 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 1 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 2 gates failed: ghz_writer|minflt_fast|ghz_fast
+  pair 4 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 B HeadPoll   rc=0 attempt 1
+  pair 5 B HeadPoll   rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 5 B HeadPoll   rc=0 attempt 2 gates failed: minflt_fast
+  pair 5 B HeadPoll   rc=0 attempt 3
+  pair 5 A Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 5 A Base       rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  HeadPoll         unresolved    hop_mean_body_ns (1 usable pairs)
+  only 1 of 6 pairs usable: B better or B worse needs at least 6
+Dispatch: dispatch -> dispatch on dispatch_instr
+  pair 0 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 0 A dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 0 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 0 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 0 B dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 0 B dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 1 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 1 B dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 1 B dispatch   rc=0 attempt 3 gates failed: pshare|ghz
+  pair 1 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 1 A dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 1 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 2 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 2 A dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 2 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 2 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 2 B dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 2 B dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 3 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 3 B dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 3 B dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 3 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 3 A dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 3 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 4 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 4 A dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 4 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 4 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 4 B dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 4 B dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 5 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 5 B dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 5 B dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 5 A dispatch   rc=0 attempt 1 gates failed: pshare|ghz
+  pair 5 A dispatch   rc=0 attempt 2
+  Dispatch         unresolved    dispatch_instr (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+F0-F1: F0 -> F1 on ns_per_event
+  pair 0 A F0         rc=0 attempt 1
+  pair 0 B F1         rc=0 attempt 1 gates failed: ghz
+  pair 0 B F1         rc=0 attempt 2
+  pair 1 B F1         rc=0 attempt 1 gates failed: pshare
+  pair 1 B F1         rc=0 attempt 2
+  pair 1 A F0         rc=0 attempt 1
+  pair 2 A F0         rc=0 attempt 1
+  pair 2 B F1         rc=0 attempt 1
+  pair 3 B F1         rc=0 attempt 1
+  pair 3 A F0         rc=0 attempt 1
+  pair 4 A F0         rc=0 attempt 1
+  pair 4 B F1         rc=0 attempt 1
+  pair 5 B F1         rc=0 attempt 1 gates failed: ghz
+  pair 5 B F1         rc=0 attempt 2
+  pair 5 A F0         rc=0 attempt 1 gates failed: ghz
+  pair 5 A F0         rc=0 attempt 2
+  F0-F1            B better      ns_per_event: median -34.4, range [-41.2, -24.8], 6/6 agree, predicted [-30, -5] miss
+F1-F2: F1 -> F2 on ns_per_event
+  pair 0 A F1         rc=0 attempt 1
+  pair 0 B F2         rc=0 attempt 1 gates failed: pshare|ghz
+  pair 0 B F2         rc=0 attempt 2 gates failed: pshare|ghz
+  pair 0 B F2         rc=0 attempt 3
+  pair 1 B F2         rc=0 attempt 1
+  pair 1 A F1         rc=0 attempt 1 gates failed: ghz
+  pair 1 A F1         rc=0 attempt 2 gates failed: pshare|ghz
+  pair 1 A F1         rc=0 attempt 3 gates failed: pshare|ghz
+  pair 2 A F1         rc=0 attempt 1
+  pair 2 B F2         rc=0 attempt 1
+  pair 3 B F2         rc=0 attempt 1
+  pair 3 A F1         rc=0 attempt 1
+  pair 4 A F1         rc=0 attempt 1
+  pair 4 B F2         rc=0 attempt 1 gates failed: pshare|ghz
+  pair 4 B F2         rc=0 attempt 2 gates failed: ghz
+  pair 4 B F2         rc=0 attempt 3 gates failed: ghz
+  pair 5 B F2         rc=0 attempt 1
+  pair 5 A F1         rc=0 attempt 1
+  F1-F2            unresolved    ns_per_event: median -60.6, range [-65.4, -57.8], 4/4 agree, predicted [-30, -5] miss
+  only 4 of 6 pairs usable: B better or B worse needs at least 6
+F2-F3: F2 -> F3 on ns_per_event
+  pair 0 A F2         rc=0 attempt 1
+  pair 0 B F3         rc=0 attempt 1
+  pair 1 B F3         rc=0 attempt 1
+  pair 1 A F2         rc=0 attempt 1
+  pair 2 A F2         rc=0 attempt 1
+  pair 2 B F3         rc=0 attempt 1
+  pair 3 B F3         rc=0 attempt 1 gates failed: pshare|ghz
+  pair 3 B F3         rc=0 attempt 2
+  pair 3 A F2         rc=0 attempt 1
+  pair 4 A F2         rc=0 attempt 1
+  pair 4 B F3         rc=0 attempt 1
+  pair 5 B F3         rc=0 attempt 1 gates failed: pshare
+  pair 5 B F3         rc=0 attempt 2
+  pair 5 A F2         rc=0 attempt 1 gates failed: ghz
+  pair 5 A F2         rc=0 attempt 2 gates failed: ghz
+  pair 5 A F2         rc=0 attempt 3
+  F2-F3            B better      ns_per_event: median -6.43, range [-11.6, -4.73], 6/6 agree, predicted [-10, -3] hit
+F3-F4: F3 -> F4 on ns_per_event
+  pair 0 A F3         rc=0 attempt 1
+  pair 0 B F4         rc=0 attempt 1 gates failed: ghz
+  pair 0 B F4         rc=0 attempt 2 gates failed: pshare
+  pair 0 B F4         rc=0 attempt 3 gates failed: pshare|ghz
+  pair 1 B F4         rc=0 attempt 1 gates failed: ghz
+  pair 1 B F4         rc=0 attempt 2
+  pair 1 A F3         rc=0 attempt 1
+  pair 2 A F3         rc=0 attempt 1 gates failed: ghz
+  pair 2 A F3         rc=0 attempt 2
+  pair 2 B F4         rc=0 attempt 1 gates failed: pshare|ghz
+  pair 2 B F4         rc=0 attempt 2 gates failed: pshare|ghz
+  pair 2 B F4         rc=0 attempt 3
+  pair 3 B F4         rc=0 attempt 1
+  pair 3 A F3         rc=0 attempt 1 gates failed: pshare|ghz
+  pair 3 A F3         rc=0 attempt 2 gates failed: pshare|ghz
+  pair 3 A F3         rc=0 attempt 3 gates failed: ghz
+  pair 4 A F3         rc=0 attempt 1 gates failed: ghz
+  pair 4 A F3         rc=0 attempt 2 gates failed: ghz
+  pair 4 A F3         rc=0 attempt 3
+  pair 4 B F4         rc=0 attempt 1 gates failed: ghz
+  pair 4 B F4         rc=0 attempt 2
+  pair 5 B F4         rc=0 attempt 1
+  pair 5 A F3         rc=0 attempt 1
+  F3-F4            unresolved    ns_per_event: median -0.946, range [-4.73, 1.5], 3/4 agree, predicted [-1.23, 1.23] hit
+  only 4 of 6 pairs usable: B better or B worse needs at least 6
+F3-F4-32MB: F3 -> F4 on ns_per_event
+  pair 0 A F3         rc=0 attempt 1 gates failed: minflt
+  pair 0 A F3         rc=0 attempt 2
+  pair 0 B F4         rc=0 attempt 1 gates failed: pshare|minflt
+  pair 0 B F4         rc=0 attempt 2
+  pair 1 B F4         rc=0 attempt 1
+  pair 1 A F3         rc=0 attempt 1
+  pair 2 A F3         rc=0 attempt 1
+  pair 2 B F4         rc=0 attempt 1
+  pair 3 B F4         rc=0 attempt 1
+  pair 3 A F3         rc=0 attempt 1
+  pair 4 A F3         rc=0 attempt 1
+  pair 4 B F4         rc=0 attempt 1
+  pair 5 B F4         rc=0 attempt 1
+  pair 5 A F3         rc=0 attempt 1 gates failed: minflt
+  pair 5 A F3         rc=0 attempt 2
+  F3-F4-32MB       B better      ns_per_event: median -36.2, range [-40.6, -31.6], 6/6 agree, predicted [-32.6, 0] miss
+report: <out>/raw/report.md
+real 1614.62
+user 2009.18
+sys 115.79
+
+Second pass, same binaries and --out: compare.py keeps every valid run and re-runs the ones the gates rejected (up to 3 attempts each).
+Mon Nov 16 17:55:21 IST 2026
+18 comparisons, 6 pairs each, about 27 min
+  AA-hop           Base     -> Base       hop_mean_body_ns
+  AA-e2e-p99       Base     -> Base       e2e_p99
+  AA-wsat          Base     -> Base       wsat_ns
+  AA-feed          F4       -> F4         ns_per_event
+  Mutex-Base-e2e   Mutex    -> Base       e2e_p99
+  Mutex-Base-wsat  Mutex    -> Base       wsat_ns
+  Writer-alone     Base     -> Base       wsat_ns
+  Pad-pp           Base     -> Pad64      hop_mean_body_ns
+  Pad-wsat         Base     -> Pad64      wsat_ns
+  Copy             Base     -> Copy15     hop_mean_body_ns
+  Iso-slowE        Base     -> Base       hop_mean_body_ns
+  HeadPoll         Base     -> HeadPoll   hop_mean_body_ns
+  Dispatch         dispatch -> dispatch   dispatch_instr
+  F0-F1            F0       -> F1         ns_per_event
+  F1-F2            F1       -> F2         ns_per_event
+  F2-F3            F2       -> F3         ns_per_event
+  F3-F4            F3       -> F4         ns_per_event
+  F3-F4-32MB       F3       -> F4         ns_per_event
+AA-hop: Base -> Base on hop_mean_body_ns
+  pair 2 A Base       rc=0 attempt 1 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 2 A Base       rc=0 attempt 2 gates failed: minflt_writer
+  pair 2 A Base       rc=0 attempt 3 gates failed: minflt_fast
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer
+  pair 3 B Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 3 B Base       rc=0 attempt 3 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 5 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 5 A Base       rc=0 attempt 3
+  AA-hop           unresolved    hop_mean_body_ns: median -1.37, range [-1.97, 0.404], 3/4 agree, predicted [-1, 1] miss
+  only 4 of 6 pairs usable: B better or B worse needs at least 6
+AA-e2e-p99: Base -> Base on e2e_p99
+  AA-e2e-p99       unresolved    e2e_p99: median +0, range [0, 1.02e+03], 1/6 agree, predicted [-1, 1] hit
+AA-wsat: Base -> Base on wsat_ns
+  AA-wsat          unresolved    wsat_ns: median +0.0775, range [-0.605, 1.61], 3/6 agree, predicted [-1, 1] hit
+AA-feed: F4 -> F4 on ns_per_event
+  AA-feed          no difference ns_per_event: median -0.122, range [-0.397, 0.214], 4/6 agree, predicted [-1.13, 1.13] hit
+Mutex-Base-e2e: Mutex -> Base on e2e_p99
+  pair 2 B Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast|fast_laps
+  pair 2 B Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast|fast_laps
+  pair 2 B Base       rc=0 attempt 3
+  Mutex-Base-e2e   B better      e2e_p99: median -2.96e+03, range [-3.57e+03, -2.58e+03], 6/6 agree, predicted [-51, -34] miss
+Mutex-Base-wsat: Mutex -> Base on wsat_ns
+  pair 0 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 0 A Mutex      rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 0 A Mutex      rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Mutex      rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 1 A Mutex      rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 1 A Mutex      rc=0 attempt 3 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 2 A Mutex      rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 2 A Mutex      rc=0 attempt 2 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 2 A Mutex      rc=0 attempt 3 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 2 B Base       rc=0 attempt 1
+  pair 3 A Mutex      rc=0 attempt 1 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 3 A Mutex      rc=0 attempt 2 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 3 A Mutex      rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Mutex      rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 4 A Mutex      rc=0 attempt 2 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 4 A Mutex      rc=0 attempt 3 gates failed: ghz_writer|pshare_fast|ghz_fast
+  pair 4 B Base       rc=0 attempt 1
+  pair 5 A Mutex      rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 5 A Mutex      rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 5 A Mutex      rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  Mutex-Base-wsat  unresolved    wsat_ns (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+Writer-alone: Base -> Base on wsat_ns
+  pair 0 A Base       rc=0 attempt 1 gates failed: minflt_writer|ghz_writer
+  pair 0 A Base       rc=0 attempt 2 gates failed: ghz_writer
+  pair 0 A Base       rc=0 attempt 3 gates failed: ghz_writer
+  pair 1 B Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1 gates failed: ghz_writer
+  pair 1 A Base       rc=0 attempt 2 gates failed: ghz_writer
+  pair 1 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer
+  pair 2 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 2 A Base       rc=0 attempt 2 gates failed: pshare_writer|ghz_writer
+  pair 2 A Base       rc=0 attempt 3 gates failed: minflt_writer|ghz_writer
+  pair 2 B Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 2 B Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 2 B Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 3 B Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 3 B Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 3 A Base       rc=0 attempt 1 gates failed: ghz_writer
+  pair 3 A Base       rc=0 attempt 2 gates failed: minflt_writer|ghz_writer
+  pair 3 A Base       rc=0 attempt 3 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 4 A Base       rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|ghz_writer
+  pair 4 A Base       rc=0 attempt 2 gates failed: minflt_writer|ghz_writer
+  pair 4 A Base       rc=0 attempt 3 gates failed: ghz_writer
+  pair 4 B Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 4 B Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 4 B Base       rc=0 attempt 3 gates failed: ghz_writer|ghz_fast
+  pair 5 B Base       rc=0 attempt 1 gates failed: ghz_writer|ghz_fast
+  pair 5 B Base       rc=0 attempt 2 gates failed: minflt_writer|ghz_writer|ghz_fast
+  pair 5 B Base       rc=0 attempt 3
+  pair 5 A Base       rc=0 attempt 1 gates failed: ghz_writer
+  pair 5 A Base       rc=0 attempt 2
+  Writer-alone     unresolved    wsat_ns (1 usable pairs)
+  only 1 of 6 pairs usable: B better or B worse needs at least 6
+Pad-pp: Base -> Pad64 on hop_mean_body_ns
+  pair 0 A Base       rc=0 attempt 1 gates failed: pshare_writer
+  pair 0 A Base       rc=0 attempt 2 gates failed: pshare_writer|minflt_fast|pshare_fast|fast_laps
+  pair 0 A Base       rc=0 attempt 3
+  pair 1 B Pad64      rc=0 attempt 1 gates failed: minflt_fast
+  pair 1 B Pad64      rc=0 attempt 2
   pair 1 A Base       rc=0 attempt 1
   pair 2 A Base       rc=0 attempt 1
   pair 2 B Pad64      rc=0 attempt 1
-  pair 3 B Pad64      rc=0 attempt 1
   pair 3 A Base       rc=0 attempt 1
   pair 4 A Base       rc=0 attempt 1
-  pair 4 B Pad64      rc=0 attempt 1
-  pair 5 B Pad64      rc=0 attempt 1
+  pair 4 B Pad64      rc=0 attempt 1 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 4 B Pad64      rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 4 B Pad64      rc=0 attempt 3 gates failed: pshare_writer|pshare_fast
   pair 5 A Base       rc=0 attempt 1
-  Pad-pp           no difference hop_mean_body_ns: median +0.919, range [0.274, 4.38], 6/6 agree, predicted [-2, 2] hit
+  Pad-pp           unresolved    hop_mean_body_ns: median +9.94, range [3.38, 19.4], 5/5 agree, predicted [-2, 2] miss
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
 Pad-wsat: Base -> Pad64 on wsat_ns
   pair 0 A Base       rc=0 attempt 1
   pair 0 B Pad64      rc=0 attempt 1
@@ -145,10 +646,9 @@ Pad-wsat: Base -> Pad64 on wsat_ns
   pair 3 B Pad64      rc=0 attempt 1
   pair 3 A Base       rc=0 attempt 1
   pair 4 A Base       rc=0 attempt 1
-  pair 4 B Pad64      rc=0 attempt 1
   pair 5 B Pad64      rc=0 attempt 1
   pair 5 A Base       rc=0 attempt 1
-  Pad-wsat         B better      wsat_ns: median -1.75, range [-3.37, -1.47], 6/6 agree, predicted [-2, 2] hit
+  Pad-wsat         B worse       wsat_ns: median +6.1, range [0.102, 8.98], 6/6 agree, predicted [-2, 2] miss
 Copy: Base -> Copy15 on hop_mean_body_ns
   pair 0 A Base       rc=0 attempt 1
   pair 0 B Copy15     rc=0 attempt 1
@@ -161,126 +661,165 @@ Copy: Base -> Copy15 on hop_mean_body_ns
   pair 4 A Base       rc=0 attempt 1
   pair 4 B Copy15     rc=0 attempt 1
   pair 5 B Copy15     rc=0 attempt 1
-  pair 5 A Base       rc=0 attempt 1
-  Copy             B worse       hop_mean_body_ns: median +42, range [36.6, 43.5], 6/6 agree, predicted [31, 38] miss
+  pair 5 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 5 A Base       rc=0 attempt 2 gates failed: minflt_writer|minflt_fast
+  pair 5 A Base       rc=0 attempt 3
+  Copy             B worse       hop_mean_body_ns: median +49.3, range [42.7, 51.2], 6/6 agree, predicted [31, 38] miss
 Iso-slowE: Base -> Base on hop_mean_body_ns
   pair 0 A Base       rc=0 attempt 1
   pair 0 B Base       rc=0 attempt 1
   pair 1 B Base       rc=0 attempt 1
   pair 1 A Base       rc=0 attempt 1
-  pair 2 A Base       rc=0 attempt 1
-  pair 2 B Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1 gates failed: minflt_fast
+  pair 2 A Base       rc=0 attempt 2
+  pair 2 B Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast|fast_laps
+  pair 2 B Base       rc=0 attempt 2
   pair 3 B Base       rc=0 attempt 1
-  pair 3 A Base       rc=0 attempt 1
-  pair 4 A Base       rc=0 attempt 1
+  pair 3 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 3 A Base       rc=0 attempt 2 gates failed: pshare_writer|pshare_fast
+  pair 3 A Base       rc=0 attempt 3 gates failed: pshare_writer|pshare_fast
+  pair 4 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 4 A Base       rc=0 attempt 2
   pair 4 B Base       rc=0 attempt 1
-  pair 5 B Base       rc=0 attempt 1
+  pair 5 B Base       rc=0 attempt 1 gates failed: pshare_writer|ghz_writer|pshare_fast|ghz_fast|fast_laps
+  pair 5 B Base       rc=0 attempt 2 gates failed: ghz_writer|ghz_fast
+  pair 5 B Base       rc=0 attempt 3
   pair 5 A Base       rc=0 attempt 1
-  Iso-slowE        B worse       hop_mean_body_ns: median +133, range [113, 144], 6/6 agree, predicted [-2, 2] miss
+  Iso-slowE        unresolved    hop_mean_body_ns: median +152, range [140, 154], 5/5 agree, predicted [-2, 2] miss
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
 HeadPoll: Base -> HeadPoll on hop_mean_body_ns
-  pair 0 A Base       rc=0 attempt 1
-  pair 0 B HeadPoll   rc=0 attempt 1
-  pair 1 B HeadPoll   rc=0 attempt 1
-  pair 1 A Base       rc=0 attempt 1
+  pair 0 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 0 A Base       rc=0 attempt 2
+  pair 0 B HeadPoll   rc=0 attempt 1 gates failed: pshare_writer|minflt_fast|pshare_fast
+  pair 0 B HeadPoll   rc=0 attempt 2
   pair 2 A Base       rc=0 attempt 1
-  pair 2 B HeadPoll   rc=0 attempt 1
+  pair 2 B HeadPoll   rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
+  pair 2 B HeadPoll   rc=0 attempt 2 gates failed: minflt_fast
+  pair 2 B HeadPoll   rc=0 attempt 3
   pair 3 B HeadPoll   rc=0 attempt 1
   pair 3 A Base       rc=0 attempt 1
   pair 4 A Base       rc=0 attempt 1
-  pair 4 B HeadPoll   rc=0 attempt 1
-  pair 5 B HeadPoll   rc=0 attempt 1
-  pair 5 A Base       rc=0 attempt 1 gates failed: pshare_writer|pshare_fast
-  pair 5 A Base       rc=0 attempt 2
-  HeadPoll         B worse       hop_mean_body_ns: median +29.7, range [10.2, 47.6], 6/6 agree, predicted [25, 50] hit
+  pair 5 A Base       rc=0 attempt 1
+  HeadPoll         unresolved    hop_mean_body_ns: median +41.9, range [30.1, 52.5], 5/5 agree, predicted [25, 50] hit
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
 Dispatch: dispatch -> dispatch on dispatch_instr
   pair 0 A dispatch   rc=0 attempt 1
+  pair 0 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 0 B dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 0 B dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 1 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 1 B dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 1 B dispatch   rc=0 attempt 3 gates failed: pshare|ghz
+  pair 1 A dispatch   rc=0 attempt 1 gates failed: pshare|ghz
+  pair 1 A dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 1 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 2 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 2 A dispatch   rc=0 attempt 2
+  pair 2 B dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 2 B dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 2 B dispatch   rc=0 attempt 3 gates failed: pshare|ghz
+  pair 3 B dispatch   rc=0 attempt 1 gates failed: pshare|ghz
+  pair 3 B dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 3 B dispatch   rc=0 attempt 3 gates failed: pshare|ghz
+  pair 3 A dispatch   rc=0 attempt 1 gates failed: pshare|ghz
+  pair 3 A dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 3 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 4 A dispatch   rc=0 attempt 1 gates failed: ghz
+  pair 4 A dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 4 A dispatch   rc=0 attempt 3 gates failed: ghz
+  pair 4 B dispatch   rc=0 attempt 1 gates failed: pshare|ghz
+  pair 4 B dispatch   rc=0 attempt 2 gates failed: pshare|ghz
+  pair 4 B dispatch   rc=0 attempt 3 gates failed: pshare|ghz
+  pair 5 B dispatch   rc=0 attempt 1 gates failed: pshare|ghz
+  pair 5 B dispatch   rc=0 attempt 2 gates failed: ghz
+  pair 5 B dispatch   rc=0 attempt 3 gates failed: ghz
+  Dispatch         unresolved    dispatch_instr (0 usable pairs)
+  only 0 of 6 pairs usable: B better or B worse needs at least 6
+F0-F1: F0 -> F1 on ns_per_event
+  F0-F1            B better      ns_per_event: median -34.4, range [-41.2, -24.8], 6/6 agree, predicted [-30, -5] miss
+F1-F2: F1 -> F2 on ns_per_event
+  pair 1 A F1         rc=0 attempt 1
+  pair 4 B F2         rc=0 attempt 1
+  F1-F2            B better      ns_per_event: median -60.6, range [-65.4, -56.9], 6/6 agree, predicted [-30, -5] miss
+F2-F3: F2 -> F3 on ns_per_event
+  F2-F3            B better      ns_per_event: median -6.43, range [-11.6, -4.73], 6/6 agree, predicted [-10, -3] hit
+F3-F4: F3 -> F4 on ns_per_event
+  pair 0 B F4         rc=0 attempt 1
+  pair 3 A F3         rc=0 attempt 1
+  F3-F4            unresolved    ns_per_event: median -0.931, range [-4.73, 6.38], 4/6 agree, predicted [-1.18, 1.18] hit
+F3-F4-32MB: F3 -> F4 on ns_per_event
+  F3-F4-32MB       B better      ns_per_event: median -36.2, range [-40.6, -31.6], 6/6 agree, predicted [-32.6, 0] miss
+report: <out>/raw/report.md
+real 1009.27
+user 827.58
+sys 64.99
+
+Third pass, only the comparisons still short of 6 usable pairs; same binaries and --out.
+Mon Nov 16 18:12:29 IST 2026
+7 comparisons, 6 pairs each, about 10 min
+  AA-hop           Base     -> Base       hop_mean_body_ns
+  Mutex-Base-wsat  Mutex    -> Base       wsat_ns
+  Writer-alone     Base     -> Base       wsat_ns
+  Pad-pp           Base     -> Pad64      hop_mean_body_ns
+  Iso-slowE        Base     -> Base       hop_mean_body_ns
+  HeadPoll         Base     -> HeadPoll   hop_mean_body_ns
+  Dispatch         dispatch -> dispatch   dispatch_instr
+AA-hop: Base -> Base on hop_mean_body_ns
+  pair 2 A Base       rc=0 attempt 1
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer
+  pair 3 B Base       rc=0 attempt 2
+  AA-hop           unresolved    hop_mean_body_ns: median -1.71, range [-3.8, 0.404], 5/6 agree, predicted [-1, 1] miss
+Mutex-Base-wsat: Mutex -> Base on wsat_ns
+  pair 0 A Mutex      rc=0 attempt 1
+  pair 1 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|minflt_fast|pshare_fast
+  pair 1 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_writer|minflt_fast|pshare_fast
+  pair 1 A Mutex      rc=0 attempt 3
+  pair 2 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|minflt_fast
+  pair 2 A Mutex      rc=0 attempt 2 gates failed: minflt_writer|pshare_fast
+  pair 2 A Mutex      rc=0 attempt 3 gates failed: minflt_writer
+  pair 3 A Mutex      rc=0 attempt 1
+  pair 4 A Mutex      rc=0 attempt 1 gates failed: minflt_writer|minflt_fast|pshare_fast
+  pair 4 A Mutex      rc=0 attempt 2
+  pair 5 A Mutex      rc=0 attempt 1
+  Mutex-Base-wsat  unresolved    wsat_ns: median -3.67, range [-5.49, -2.8], 5/5 agree, predicted [-58, -42] miss
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
+Writer-alone: Base -> Base on wsat_ns
+  pair 0 A Base       rc=0 attempt 1
+  pair 1 A Base       rc=0 attempt 1
+  pair 2 A Base       rc=0 attempt 1
+  pair 2 B Base       rc=0 attempt 1 gates failed: minflt_writer|minflt_fast
+  pair 2 B Base       rc=0 attempt 2
+  pair 3 B Base       rc=0 attempt 1 gates failed: minflt_writer|minflt_fast
+  pair 3 B Base       rc=0 attempt 2 gates failed: minflt_writer|minflt_fast
+  pair 3 B Base       rc=0 attempt 3
+  pair 3 A Base       rc=0 attempt 1
+  pair 4 A Base       rc=0 attempt 1 gates failed: minflt_writer
+  pair 4 A Base       rc=0 attempt 2 gates failed: minflt_writer|pshare_writer
+  pair 4 A Base       rc=0 attempt 3
+  pair 4 B Base       rc=0 attempt 1
+  Writer-alone     B worse       wsat_ns: median +21.8, range [21.5, 23.3], 6/6 agree, predicted [15, 25] hit
+Pad-pp: Base -> Pad64 on hop_mean_body_ns
+  pair 4 B Pad64      rc=0 attempt 1 gates failed: minflt_fast
+  pair 4 B Pad64      rc=0 attempt 2
+  Pad-pp           B worse       hop_mean_body_ns: median +7.15, range [3.38, 19.4], 6/6 agree, predicted [-2, 2] miss
+Iso-slowE: Base -> Base on hop_mean_body_ns
+  pair 3 A Base       rc=0 attempt 1
+  Iso-slowE        B worse       hop_mean_body_ns: median +153, range [140, 164], 6/6 agree, predicted [-2, 2] miss
+HeadPoll: Base -> HeadPoll on hop_mean_body_ns
+  HeadPoll         unresolved    hop_mean_body_ns: median +41.9, range [30.1, 52.5], 5/5 agree, predicted [25, 50] hit
+  only 5 of 6 pairs usable: B better or B worse needs at least 6
+Dispatch: dispatch -> dispatch on dispatch_instr
   pair 0 B dispatch   rc=0 attempt 1
   pair 1 B dispatch   rc=0 attempt 1
   pair 1 A dispatch   rc=0 attempt 1
-  pair 2 A dispatch   rc=0 attempt 1
   pair 2 B dispatch   rc=0 attempt 1
   pair 3 B dispatch   rc=0 attempt 1
   pair 3 A dispatch   rc=0 attempt 1
   pair 4 A dispatch   rc=0 attempt 1
   pair 4 B dispatch   rc=0 attempt 1
   pair 5 B dispatch   rc=0 attempt 1
-  pair 5 A dispatch   rc=0 attempt 1
   Dispatch         B worse       dispatch_instr: median +9.9, range [9.9, 9.9], 6/6 agree, predicted [5, 40] hit
-F0-F1: F0 -> F1 on ns_per_event
-  pair 0 A F0         rc=0 attempt 1
-  pair 0 B F1         rc=0 attempt 1
-  pair 1 B F1         rc=0 attempt 1
-  pair 1 A F0         rc=0 attempt 1
-  pair 2 A F0         rc=0 attempt 1
-  pair 2 B F1         rc=0 attempt 1
-  pair 3 B F1         rc=0 attempt 1
-  pair 3 A F0         rc=0 attempt 1
-  pair 4 A F0         rc=0 attempt 1
-  pair 4 B F1         rc=0 attempt 1
-  pair 5 B F1         rc=0 attempt 1
-  pair 5 A F0         rc=0 attempt 1
-  F0-F1            B better      ns_per_event: median -29.9, range [-40.2, -29.2], 6/6 agree, predicted [-30, -5] hit
-F1-F2: F1 -> F2 on ns_per_event
-  pair 0 A F1         rc=0 attempt 1 gates failed: pshare
-  pair 0 A F1         rc=0 attempt 2 gates failed: pshare
-  pair 0 A F1         rc=0 attempt 3
-  pair 0 B F2         rc=0 attempt 1
-  pair 1 B F2         rc=0 attempt 1 gates failed: pshare
-  pair 1 B F2         rc=0 attempt 2
-  pair 1 A F1         rc=0 attempt 1 gates failed: pshare
-  pair 1 A F1         rc=0 attempt 2 gates failed: pshare
-  pair 1 A F1         rc=0 attempt 3 gates failed: pshare
-  pair 2 A F1         rc=0 attempt 1
-  pair 2 B F2         rc=0 attempt 1
-  pair 3 B F2         rc=0 attempt 1
-  pair 3 A F1         rc=0 attempt 1
-  pair 4 A F1         rc=0 attempt 1
-  pair 4 B F2         rc=0 attempt 1
-  pair 5 B F2         rc=0 attempt 1
-  pair 5 A F1         rc=0 attempt 1
-  F1-F2            unresolved    ns_per_event: median -63.8, range [-70, -58.5], 5/5 agree, predicted [-30, -5] miss
-  only 5 of 6 pairs usable: B better or B worse needs at least 6
-F2-F3: F2 -> F3 on ns_per_event
-  pair 0 A F2         rc=0 attempt 1
-  pair 0 B F3         rc=0 attempt 1
-  pair 1 B F3         rc=0 attempt 1
-  pair 1 A F2         rc=0 attempt 1
-  pair 2 A F2         rc=0 attempt 1
-  pair 2 B F3         rc=0 attempt 1
-  pair 3 B F3         rc=0 attempt 1
-  pair 3 A F2         rc=0 attempt 1
-  pair 4 A F2         rc=0 attempt 1
-  pair 4 B F3         rc=0 attempt 1
-  pair 5 B F3         rc=0 attempt 1
-  pair 5 A F2         rc=0 attempt 1
-  F2-F3            B better      ns_per_event: median -7.02, range [-7.6, -5.34], 6/6 agree, predicted [-10, -3] hit
-F3-F4: F3 -> F4 on ns_per_event
-  pair 0 A F3         rc=0 attempt 1
-  pair 0 B F4         rc=0 attempt 1
-  pair 1 B F4         rc=0 attempt 1
-  pair 1 A F3         rc=0 attempt 1
-  pair 2 A F3         rc=0 attempt 1
-  pair 2 B F4         rc=0 attempt 1
-  pair 3 B F4         rc=0 attempt 1
-  pair 3 A F3         rc=0 attempt 1
-  pair 4 A F3         rc=0 attempt 1
-  pair 4 B F4         rc=0 attempt 1
-  pair 5 B F4         rc=0 attempt 1
-  pair 5 A F3         rc=0 attempt 1
-  F3-F4            unresolved    ns_per_event: median -1.62, range [-2.47, -1.19], 6/6 agree, predicted [-1.09, 1.09] miss
-F3-F4-32MB: F3 -> F4 on ns_per_event
-  pair 0 A F3         rc=0 attempt 1
-  pair 0 B F4         rc=0 attempt 1
-  pair 1 B F4         rc=0 attempt 1
-  pair 1 A F3         rc=0 attempt 1
-  pair 2 A F3         rc=0 attempt 1
-  pair 2 B F4         rc=0 attempt 1
-  pair 3 B F4         rc=0 attempt 1
-  pair 3 A F3         rc=0 attempt 1
-  pair 4 A F3         rc=0 attempt 1
-  pair 4 B F4         rc=0 attempt 1
-  pair 5 B F4         rc=0 attempt 1
-  pair 5 A F3         rc=0 attempt 1
-  F3-F4-32MB       B better      ns_per_event: median -37.2, range [-39, -30.2], 6/6 agree, predicted [-30, 0] miss
-report: /tmp/mdbus-campaign-v2/raw/report.md
-python scripts/compare.py --all --out /tmp/mdbus-campaign-v2/raw  925.32s user 59.16s system 98% cpu 16:38.84 total
+report: <out>/raw/report.md
+real 293.34
+user 137.42
+sys 37.95
